@@ -504,14 +504,27 @@ for (const waiting of ['blocked', 'paused'] as const)
       expect(conflictState.nodeRestack?.conflict).toBeDefined()
       expect(h.launched.filter((entry) => entry.slug === owner.slug)).toHaveLength(0)
       for (let index = 1; index <= 3; index++) {
+        // Each descendant's runner ran and stopped before it blocked: a
+        // launch whose execution never started would keep its slot.
+        const slug = `capacity-holder-${index}`
+        await h.store.append(slug, {
+          actor,
+          type: 'execution.started',
+          payload: { provider: 'test', workspaceRef: slug, instance: slug },
+        })
+        await h.store.append(slug, {
+          actor,
+          type: 'execution.ended',
+          payload: { instance: slug, workspaceRef: slug, outcome: 'completed' },
+        })
         if (waiting === 'paused')
-          await h.store.append(`capacity-holder-${index}`, {
+          await h.store.append(slug, {
             actor,
             type: 'build.paused',
             payload: {},
           })
         else
-          await h.store.append(`capacity-holder-${index}`, {
+          await h.store.append(slug, {
             actor: { kind: 'kernel' },
             type: 'escalation.raised',
             payload: {

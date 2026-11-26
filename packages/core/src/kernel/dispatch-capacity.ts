@@ -6,6 +6,7 @@ import { integrationAdmissible, integrationNeedsRunner } from './integration-sta
 import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
 import { nodeMeasurementDue, nodeMeasurementNeed, pendingMeasurementRequest } from './measurement'
+import { escalationCarried, type EscalationCarryInput } from './verify-stage-state'
 import {
   reopenRestart,
   reopenSpecPending,
@@ -28,11 +29,14 @@ import {
  * releases it as soon as it waits on the outside world (`leafOutsideWait`): a
  * human (an open escalation, an acknowledged pause, a `revise-spec` answer
  * awaiting its revision, a merge decision or hold), another ticket, or the
- * forge. Release follows state; acquisition never does, so a leaf whose
- * outside wait ended asks for a slot (`slotRequest`) and holds none until it
- * is admitted again. Runner liveness plays no part in a leaf's hold, and its
- * workspace never counts. A node holds a slot only once the dispatcher
- * admitted it for a runner need it still has (`nodeHoldsSlot`); a workspace,
+ * forge. An open escalation that work Autobuild started still outruns (a
+ * verify stage's other members, a recorded launch or its execution:
+ * `escalationCarried`) does not release it, and its answer releases nothing.
+ * Release follows state; acquisition never does, so a leaf whose outside
+ * wait ended asks for a slot (`slotRequest`) and holds none until it is
+ * admitted again. Runner liveness plays no part in a leaf's hold (only launch
+ * records and execution facts do), and its workspace never counts. A node
+ * holds a slot only once the dispatcher admitted it for a runner need it still has (`nodeHoldsSlot`); a workspace,
  * a lease or a provisioning marker never takes one. */
 export interface CapacityBuild {
   record: BuildRecord
@@ -245,12 +249,45 @@ function humanWait(state: BuildState, status: BuildState['status']): boolean {
   )
 }
 
-/** A nonterminal leaf holds a slot when it does not wait on the outside world
- * and was admitted since its last release. No lease, provisioning marker or
- * open execution enters: a runner left over from before a release never
- * takes the slot back. */
+/** The carry input of a leaf's reduced state (`escalationCarried`). */
+export function escalationCarryInput(state: BuildState): EscalationCarryInput {
+  return {
+    openEscalations: state.openEscalations,
+    verifyStage: state.verifyStage,
+    verifyCycle: state.verify.cycleSince,
+    maxAttemptSeen: state.verify.maxAttemptSeen,
+    executions: state.executions,
+    liveExecution: state.openExecution,
+    slotAdmittedSeq: state.slotAdmittedSeq,
+    failures: [state.dispatchFailures, state.infrastructureFailures, state.setupFailures],
+  }
+}
+
+/** A leaf whose only outside wait is its open escalations: blocked, with no
+ * `revise-spec` answer awaiting its revision and no finished pipeline
+ * waiting for its merge decision. */
+function blockedOnlyByEscalations(build: LeafSlotFacts): boolean {
+  const { state } = build
+  return (
+    state.status === 'blocked' &&
+    state.openEscalations.length > 0 &&
+    !reviseSpecPending(state) &&
+    !(epilogueLeaf(state) && !epilogueWorkDue(build))
+  )
+}
+
+/** A nonterminal leaf holds a slot when it was admitted since its last
+ * release and either does not wait on the outside world or waits only on
+ * escalations that work Autobuild started still outruns (`escalationCarried`).
+ * No lease or provisioning marker enters: a runner left over from before a
+ * release never takes the slot back. */
 export function leafHoldsSlot(build: LeafSlotFacts): boolean {
-  return !terminal(build.state) && !leafOutsideWait(build) && slotAdmitted(build.state)
+  return (
+    !terminal(build.state) &&
+    slotAdmitted(build.state) &&
+    (!leafOutsideWait(build) ||
+      (blockedOnlyByEscalations(build) && escalationCarried(escalationCarryInput(build.state))))
+  )
 }
 
 /** An optimization node's workspace that no work owns: no runner, no open

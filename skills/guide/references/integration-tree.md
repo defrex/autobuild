@@ -117,8 +117,8 @@ every build that holds a slot, as every admission does.
   (a restack conflict's escalation included), holds none. Once answered or
   resumed, it requests its slot again.
 - **Never held by idling.** An idle collecting node, a node waiting for a
-  repair child and a node's retained workspace hold none. Blocked and paused
-  descendants hold none either, so they never stand between a node and the
+  repair child and a node's retained workspace hold none. Paused descendants,
+  and blocked ones with nothing still working on them, hold none either, so they never stand between a node and the
   slot it needs to unblock them.
 
 Status and both dashboards report occupancy against configured capacity, and

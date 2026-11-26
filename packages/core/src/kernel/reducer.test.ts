@@ -1,5 +1,5 @@
 import { terminalGuardReducer } from './terminal-guard'
-import { buildPriority } from './dispatch-capacity'
+import { buildPriority, leafHoldsSlot } from './dispatch-capacity'
 import { leafTransaction, leafRestackLog } from './generators/leaf-restack-log'
 /**
  * Reducer seam tests (SPEC §15.5), fixture-driven off the walkthroughs in
@@ -1506,6 +1506,9 @@ describe('reduceBuild: finalize projections', () => {
     expect(reduceBuild([])).not.toHaveProperty('slotReleasedSeq')
     const log = toLog([
       ...prelude(),
+      // The claim's first execution stops on the question.
+      ev('execution.started', { provider: 'p', workspaceRef: 'w', instance: 'i0' }),
+      ev('execution.ended', { instance: 'i0', workspaceRef: 'w', outcome: 'completed' }),
       ev('escalation.raised', {
         id: 'esc_1',
         phase: 'implement',
@@ -1541,14 +1544,14 @@ describe('reduceBuild: finalize projections', () => {
     expect(at(4)).toMatchObject({ slotAdmittedSeq: 1 })
     expect(at(4)).not.toHaveProperty('slotReleasedSeq')
     // An answer to an unknown escalation releases nothing.
-    expect(at(6)).not.toHaveProperty('slotReleasedSeq')
-    expect(at(7)).toMatchObject({ slotAdmittedSeq: 1, slotReleasedSeq: 7 })
-    expect(at(11)).toMatchObject({ slotAdmittedSeq: 1, slotReleasedSeq: 7 })
-    expect(at(12)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 7 })
-    expect(at(14)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 14 })
+    expect(at(8)).not.toHaveProperty('slotReleasedSeq')
+    expect(at(9)).toMatchObject({ slotAdmittedSeq: 1, slotReleasedSeq: 9 })
+    expect(at(13)).toMatchObject({ slotAdmittedSeq: 1, slotReleasedSeq: 9 })
+    expect(at(14)).toMatchObject({ slotAdmittedSeq: 14, slotReleasedSeq: 9 })
+    expect(at(16)).toMatchObject({ slotAdmittedSeq: 14, slotReleasedSeq: 16 })
     // Resume and spec revision neither admit nor release.
-    expect(at(17)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 14 })
-    expect(at(18)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 18 })
+    expect(at(19)).toMatchObject({ slotAdmittedSeq: 14, slotReleasedSeq: 16 })
+    expect(at(20)).toMatchObject({ slotAdmittedSeq: 14, slotReleasedSeq: 20 })
   })
 
   test('a node admission names its need; one without a need clears it (SPEC §12)', () => {
@@ -2759,4 +2762,170 @@ test('a reopen lets the re-run finalize record its terminal again', () => {
     finalize.reduce(toLog([...finalized, ev('build.reopened', { feedback: 'rename it' })]))
       .diagnostic,
   ).toBeUndefined()
+})
+
+describe('answers release a slot only when the build was not carried (SPEC §12, #1348)', () => {
+  const start = (instance: string) =>
+    ev('execution.started', { provider: 'p', workspaceRef: 'w', instance })
+  const end = (instance: string) =>
+    ev('execution.ended', { instance, workspaceRef: 'w', outcome: 'completed' })
+  const record = ev('slot.admitted', {})
+  const raise = (id: string, session?: string) =>
+    ev(
+      'escalation.raised',
+      session === undefined
+        ? { id, phase: 'implement', round: 1, source: 'agent', question: 'which API?' }
+        : { id, phase: 'verify:types', round: 1, source: 'agent', question: 'which fixture?' },
+      { kind: 'agent', role: 'verify', session: session ?? 's_test' },
+    )
+  const answer = (id: string) =>
+    ev('escalation.answered', { id, answer: 'the new one', resolution: 'guidance' })
+  const janitor = ev('build.janitor-escalated', {
+    id: 'jan',
+    operation: 'read build state',
+    message: 'store unavailable',
+    attempt: 3,
+    firstFailureAt: '2026-11-26T20:00:00.000Z',
+    question: 'the janitor keeps failing',
+  })
+  const policyRaise = ev(
+    'escalation.raised',
+    {
+      id: 'pol',
+      phase: 'setup',
+      source: 'policy',
+      policyCause: 'dispatch-failure-limit',
+      question: 'dispatch keeps failing',
+    },
+    DISPATCHER,
+  )
+  const provisioning = ev('workspace.provision-started', {
+    provider: 'p',
+    branch: 'ab/x',
+    generation: 2,
+  })
+  const member = (step: string) => ev('verify.started', { step, attempt: 1 })
+  const completed = (step: string) => ev('verify.completed', { step, attempt: 1, pass: true })
+  const owns = ev('session.started', {
+    session: 's_types',
+    role: 'verify',
+    runner: 'scripted',
+    phase: 'verify:types',
+    round: 1,
+  })
+  // The claim's first execution ran and ended: its `build.created` record is
+  // spent, so each sequence below decides the slot by itself.
+  const spent = [...prelude(), start('i0'), end('i0')]
+
+  /** Reduced at every prefix from `from` (1-based): held throughout, and the
+   * final state has released nothing. */
+  function heldThroughout(writes: EventWrite[], from: number) {
+    const log = toLog([...spent, ...writes])
+    for (let n = spent.length + from; n <= log.length; n++)
+      expect({ n, held: leafHoldsSlot({ state: reduceBuild(log.slice(0, n)) }) }).toEqual({
+        n,
+        held: true,
+      })
+    expect(reduceBuild(log).slotReleasedSeq).toBeUndefined()
+  }
+  function released(writes: EventWrite[]) {
+    const state = reduceBuild(toLog([...spent, ...writes]))
+    expect(state.slotReleasedSeq).toBe(state.lastSeq)
+    expect(leafHoldsSlot({ state })).toBe(false)
+  }
+
+  test('a parallel verify question keeps the slot through a replacement and its answer', () => {
+    // f_f68ee484: the original runner ends with siblings unfinished; its
+    // recorded replacement carries once they finish.
+    heldThroughout(
+      [
+        record,
+        start('i1'),
+        member('types'),
+        member('unit'),
+        member('docs'),
+        owns,
+        raise('esc', 's_types'),
+        end('i1'),
+        record,
+        start('i2'),
+        completed('unit'),
+        completed('docs'),
+        answer('esc'),
+        end('i2'),
+      ],
+      1,
+    )
+  })
+
+  test('the answer retains only while the runner works (criterion 3)', () => {
+    heldThroughout([record, start('i1'), raise('esc'), answer('esc'), end('i1')], 1)
+    released([record, start('i1'), raise('esc'), end('i1'), answer('esc')])
+  })
+
+  test('a janitor question never vetoes a recorded execution or launch (f_0990538c, f_90f217b1)', () => {
+    heldThroughout([record, start('i1'), janitor, answer('jan'), end('i1')], 1)
+    heldThroughout(
+      [
+        record,
+        provisioning,
+        janitor,
+        answer('jan'),
+        ev('workspace.provisioned', {
+          provider: 'p',
+          ref: '/ws/2',
+          branch: 'ab/x',
+          base: { source: 'remote', sha: 'base-sha' },
+        }),
+        start('i1'),
+        end('i1'),
+      ],
+      1,
+    )
+    // A recorded launch failure ends the launch.
+    released([
+      record,
+      provisioning,
+      ev('dispatch.failed', { stage: 'workspace', attempt: 1, error: 'boom' }),
+      janitor,
+      answer('jan'),
+    ])
+  })
+
+  test('a dispatcher question while provisioning keeps the slot to the start (f_73b4f1e7)', () => {
+    heldThroughout([record, provisioning, policyRaise, answer('pol'), start('i1')], 1)
+  })
+
+  test('an acknowledgement launch records nothing and carries nothing', () => {
+    released([
+      start('i1'),
+      raise('esc'),
+      end('i1'),
+      ev('build.pause-requested', {}),
+      start('ack'),
+      answer('esc'),
+    ])
+  })
+
+  test('wait.ended follows the same rule', () => {
+    const wait = [
+      record,
+      start('i1'),
+      ev(
+        'wait.requested',
+        { id: 'w', phase: 'implement', round: 1, tickets: ['B'], reason: 'needs B' },
+        { kind: 'agent', role: 'implement', session: 's_test' },
+      ),
+      ev('wait.entered', {
+        id: 'w',
+        escalation: 'esc_w',
+        tickets: [{ source: 'file', id: 'B' }],
+        reason: 'needs B',
+        question: 'Waiting on B',
+      }),
+    ]
+    const ended = ev('wait.ended', { id: 'w', cause: 'automatic', message: 'B completed' })
+    heldThroughout([...wait, ended, end('i1')], 1)
+    released([...wait, end('i1'), ended])
+  })
 })
