@@ -137,6 +137,7 @@ test('this repository pipeline runs on its GitHub issues', async () => {
     readyLabels: [],
     readyAssignee: 'me',
     createAssignee: 'me',
+    createLabels: ['autobuild'],
     createState: 'ready',
     triageState: 'triage',
     proposalState: 'triage',
