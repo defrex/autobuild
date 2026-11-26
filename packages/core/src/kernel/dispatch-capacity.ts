@@ -571,14 +571,18 @@ export function waitingExplanation(
     ]
     return notes.length ? `${entry.slug} (${notes.join(', ')})` : entry.slug
   }
-  const clause = (noun: string, waiting: SlotWaiter[]) => {
-    if (!waiting.length) return []
-    const ordered = [
-      ...waiting.filter((entry) => entry.priority === 'urgent'),
-      ...waiting.filter((entry) => entry.priority !== 'urgent'),
-    ]
+  const clause = (noun: string, waiting: SlotWaiter[]) =>
+    waiting.length
+      ? [
+          `${waiting.length} ${noun}${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of normal ticket claims: ${waiting.map(label).join(', ')}`,
+        ]
+      : []
+  const parked = (priority: TicketPriority) => {
+    const of = (waiting: SlotWaiter[] | undefined) =>
+      (waiting ?? []).filter((entry) => (entry.priority ?? 'normal') === priority)
     return [
-      `${waiting.length} ${noun}${waiting.length === 1 ? '' : 's'} waiting for a slot ahead of normal ticket claims: ${ordered.map(label).join(', ')}`,
+      ...clause('node', of(capacity?.waitingNodes)),
+      ...clause('parked build', of(capacity?.waitingBuilds)),
     ]
   }
   const urgentClaims = capacity?.urgentClaims ?? 0
@@ -586,17 +590,19 @@ export function waitingExplanation(
     const count = capacity?.startRequests?.[tier] ?? 0
     return count ? [`${count} ${tier} start request${count === 1 ? '' : 's'} ${waiting}`] : []
   }
+  // Slot admission order (SPEC §12): manual starts, urgent parked work,
+  // urgent claims (start requests first), normal parked work, normal claims.
   return [
     ...starts('manual', 'waiting ahead of all other work'),
+    ...parked('urgent'),
     ...starts('urgent', 'waiting ahead of normal parked work'),
-    ...starts('normal', 'waiting for a slot'),
-    ...clause('node', capacity?.waitingNodes ?? []),
-    ...clause('parked build', capacity?.waitingBuilds ?? []),
     ...(urgentClaims
       ? [
           `${urgentClaims} urgent ticket claim${urgentClaims === 1 ? '' : 's'} waiting ahead of normal parked work`,
         ]
       : []),
+    ...parked('normal'),
+    ...starts('normal', 'waiting for a slot'),
   ].join('; ')
 }
 

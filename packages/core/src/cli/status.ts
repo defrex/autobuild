@@ -75,10 +75,11 @@ import type { BuildFacts } from '../processes/repo-view'
  * presentation helper exposes that divergence without folding it into status
  * or lease health.
  *
- * Output carries no ANSI, ever: §16 puts themes and colors out of scope, and
- * "understandable without relying solely on color" plus "--json without ANSI
- * formatting" are both satisfied by emitting none rather than by gating on a
- * TTY check.
+ * Text output colors only the status word, with its shared tone (SPEC §14
+ * "Status words"), and only on an interactive terminal; it never does under
+ * `--json`, through a pipe or a redirect, or when a caller omits `color`. The
+ * word itself always carries the meaning, so the output is understandable
+ * without color, and machine readers never see an escape sequence.
  */
 import { join } from 'node:path'
 import type { AbEvent } from '../events/catalog'
@@ -103,7 +104,16 @@ import { sameLandingCandidate } from '../kernel/landing-state'
 import type { PipelineSourceMeta } from '../config/pipeline-source'
 import { openExecution } from '../processes/execution-settlement'
 import { currentLandingWaitReasonFrom } from '../kernel/auto-merge'
-import { autoMergeDisplay, effectiveStatus, type AutoMergeDisplay } from './dashboard/model'
+import {
+  autoMergeDisplay,
+  effectiveStatus,
+  statusBasis,
+  type AutoMergeDisplay,
+  type EffectiveStatus,
+} from './dashboard/model'
+import { buildStatusText, type DashboardTone } from './dashboard/vocabulary'
+import { paint, paintTone } from './dashboard/tone-ansi'
+import type { TerminalOut } from './terminal'
 import { decideNextFromFacts } from '../kernel/engine'
 import {
   reduceBuild,
@@ -202,6 +212,9 @@ export interface BuildSummary {
   /** Set when the open ticket wait's escalation is the only one open: the
    * dashboards' `waiting` status. `status` stays the reducer's `blocked`. */
   waitOnly?: true
+  /** The status word every surface shows (SPEC §14 "Status words"), with its
+   * tone and note. Absent for a `done` build, and from an older server. */
+  statusWord?: { word: string; tone: DashboardTone; note?: string }
   /** Why the operator held the merge, while a hold that gave one stands. */
   holdReason?: string
   /** An operator reopened this leaf and it has not settled again (§15.7). */
@@ -434,6 +447,22 @@ function measurementSummary(state: BuildState): MeasurementSummary | undefined {
   }
 }
 
+/** A nonterminal build's status word from its reduced state and slot. */
+function summaryStatusWord(
+  state: BuildState,
+  slot: SlotState | undefined,
+): BuildSummary['statusWord'] {
+  const status = effectiveStatus(state)
+  const basis = statusBasis(state)
+  if (status === 'done' || status === 'aborted' || basis === undefined) return undefined
+  const text = buildStatusText({ status, basis, ...(slot !== undefined ? { slot } : {}) })
+  return {
+    word: text.word,
+    tone: text.tone,
+    ...(text.note !== undefined ? { note: text.note } : {}),
+  }
+}
+
 /**
  * The summary over an ALREADY-reduced state — so `detail` reduces the log
  * once and builds both projections from it, rather than reducing twice.
@@ -469,6 +498,7 @@ export function summarizeFrom(
   const heldBecause = holdReason(state.landing)
   const reopened = reopenedSummary(state)
   const ciFailure = currentCiFailure(state)
+  const word = summaryStatusWord(state, slot)
   return {
     slug: record.slug,
     ...buildVocabulary(state),
@@ -524,6 +554,7 @@ export function summarizeFrom(
     ...(buildPriority(state) === 'urgent' ? { priority: 'urgent' as const } : {}),
     ...(wait !== undefined ? { wait } : {}),
     ...(effectiveStatus(state) === 'waiting' ? { waitOnly: true as const } : {}),
+    ...(word !== undefined ? { statusWord: word } : {}),
     ...(heldBecause !== undefined ? { holdReason: heldBecause } : {}),
     ...(reopened !== undefined ? { reopened } : {}),
     ...(ciFailure !== undefined
@@ -895,16 +926,26 @@ function viaMarker(actor: Actor): string {
   return `human (via ${actor.via.kind === 'session' ? `session ${actor.via.id}` : `mcp ${actor.via.client}`})`
 }
 
-function padColumns(rows: string[][]): string[] {
+/** A table cell: plain text, or text painted with escapes whose visible
+ * width is `plain`'s. Padding always goes outside the escapes. */
+type Cell = string | { plain: string; painted: string }
+
+function padColumns(rows: Cell[][]): string[] {
+  const plain = (cell: Cell) => (typeof cell === 'string' ? cell : cell.plain)
+  const painted = (cell: Cell) => (typeof cell === 'string' ? cell : cell.painted)
   const widths: number[] = []
   for (const row of rows) {
     row.forEach((cell, i) => {
-      widths[i] = Math.max(widths[i] ?? 0, cell.length)
+      widths[i] = Math.max(widths[i] ?? 0, plain(cell).length)
     })
   }
   return rows.map((row) =>
     row
-      .map((cell, i) => (i === row.length - 1 ? cell : cell.padEnd(widths[i] ?? 0)))
+      .map((cell, i) =>
+        i === row.length - 1
+          ? painted(cell)
+          : `${painted(cell)}${' '.repeat(Math.max(0, (widths[i] ?? 0) - plain(cell).length))}`,
+      )
       .join('  ')
       .trimEnd(),
   )
@@ -915,11 +956,16 @@ function padColumns(rows: string[][]): string[] {
  * is nothing to show, so an empty result is an honest answer rather than a
  * blank that reads like a bug.
  */
-export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote: string): string[] {
+export function renderSummaries(
+  summaries: BuildSummary[],
+  now: Date,
+  emptyNote: string,
+  opts: { color?: boolean } = {},
+): string[] {
   if (summaries.length === 0) return [emptyNote]
   // The two free-text columns (ticket title, PR link) go last, where their
   // width costs no alignment on the scannable columns to their left.
-  const rows: string[][] = [
+  const rows: Cell[][] = [
     ['BUILD', 'STATUS', 'SLOT', 'PHASE', 'LEASE', 'HEARTBEAT', 'PROGRESS', 'TICKET', 'PR'],
   ]
   for (const summary of summaries) {
@@ -934,7 +980,7 @@ export function renderSummaries(summaries: BuildSummary[], now: Date, emptyNote:
       : ''
     rows.push([
       summary.slug,
-      `${summaryStatus(summary)}${summary.priority === 'urgent' ? ` ${URGENT_MARK}` : ''}`,
+      statusCell(summary, summary.priority === 'urgent' ? ` ${URGENT_MARK}` : '', opts.color),
       slotText(summary) ?? '—',
       summary.kind === 'integration'
         ? `${summary.optimization ? treeVocabulary.optimizationKind : treeVocabulary.integrationKind} ${summary.integration ?? ''}${slotWait}`
@@ -982,14 +1028,53 @@ function slotText(summary: BuildSummary, urgent = (text: string) => `${text} urg
   return slot.priority === 'urgent' ? urgent(text) : text
 }
 
-/** The status word text renderers print: `waiting` for a build whose only
- * open escalation is its ticket wait, else the reducer status. */
-function summaryStatus(summary: BuildSummary): string {
-  return summary.waitOnly ? 'waiting' : summary.status
+/** The status word text renderers print with its note (SPEC §14 "Status
+ * words"), or a `done` build's reducer status. A summary from an older server
+ * carries no `statusWord`; its word is chosen from the fields it does carry. */
+function summaryStatusText(summary: BuildSummary): BuildSummary['statusWord'] | undefined {
+  if (summary.statusWord !== undefined) return summary.statusWord
+  const status: EffectiveStatus | undefined = summary.waitOnly
+    ? 'waiting'
+    : summary.status === 'aborted'
+      ? 'cleaning'
+      : summary.status === 'done'
+        ? undefined
+        : summary.status
+  if (status === undefined) return undefined
+  const text = buildStatusText({
+    status,
+    ...(summary.slot !== undefined ? { slot: summary.slot } : {}),
+  })
+  return {
+    word: text.word,
+    tone: text.tone,
+    ...(text.note !== undefined ? { note: text.note } : {}),
+  }
+}
+
+/** The STATUS text: the word painted in its tone on a color terminal, its
+ * note dim, and `suffix` plain. */
+function statusCell(summary: BuildSummary, suffix: string, color = false): Cell {
+  const word = summaryStatusText(summary)
+  if (word === undefined) return `${summary.status}${suffix}`
+  const note = word.note !== undefined ? ` (${word.note})` : ''
+  return {
+    plain: `${word.word}${note}${suffix}`,
+    painted: `${paintTone(word.word, word.tone, color)}${paint(note, 'dim', color && note !== '')}${suffix}`,
+  }
+}
+
+/** Whether `ab builds` and `ab build status` color the status word: only on
+ * an interactive terminal, and never under `--json`. */
+export function statusColor(
+  terminal: Pick<TerminalOut, 'interactive'> | undefined,
+  json: boolean,
+): boolean {
+  return terminal?.interactive === true && !json
 }
 
 /** Labeled sections, each omitted when absent ("when each is available"). */
-export function renderDetail(d: BuildDetail, now: Date): string[] {
+export function renderDetail(d: BuildDetail, now: Date, opts: { color?: boolean } = {}): string[] {
   const lines: string[] = [`build ${d.slug}`]
   if (d.nodePolling)
     lines.push(
@@ -1076,7 +1161,8 @@ export function renderDetail(d: BuildDetail, now: Date): string[] {
           lines.push(`  unsafe merge ${proof.sha}: ${proof.missing.join(', ') || proof.build}`)
     }
   }
-  lines.push(`  status:   ${summaryStatus(d)}${d.outcome !== undefined ? ` (${d.outcome})` : ''}`)
+  const status = statusCell(d, d.outcome !== undefined ? ` (${d.outcome})` : '', opts.color)
+  lines.push(`  status:   ${typeof status === 'string' ? status : status.painted}`)
   const slot = slotText(d, (text) => `${text} (urgent)`)
   if (slot !== undefined) lines.push(`  slot:     ${slot}`)
   lines.push(`  phase:    ${phaseCell(d)}`)
@@ -1360,6 +1446,8 @@ export function statusFilter(all?: boolean, queued?: boolean): BuildStatus[] {
 export interface AbBuildsOpts extends StatusOpts {
   queued?: boolean
   all?: boolean
+  /** Color the status word with its tone (`statusColor`); default plain. */
+  color?: boolean
 }
 
 /** `ab builds` — this repo's builds, active by default. Read-only. */
@@ -1435,7 +1523,9 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
           : 'active builds'
     const hint =
       opts.all === true ? '' : opts.queued === true ? ' — try --all' : ' — try --queued or --all'
-    for (const line of renderSummaries(summaries, now, `no ${scope} for ${repo}${hint}`)) {
+    for (const line of renderSummaries(summaries, now, `no ${scope} for ${repo}${hint}`, {
+      color: opts.color === true,
+    })) {
       opts.stdout(line)
     }
   })
@@ -1444,6 +1534,8 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
 export interface AbBuildStatusOpts extends StatusOpts {
   slug: string
   events?: number
+  /** Color the status word with its tone (`statusColor`); default plain. */
+  color?: boolean
 }
 
 function _openWorkspacePath(events: AbEvent[]): string | undefined {
@@ -1702,7 +1794,7 @@ export async function abBuildStatus(opts: AbBuildStatusOpts): Promise<void> {
       opts.stdout(JSON.stringify(d, null, 2))
       return
     }
-    for (const line of renderDetail(d, now)) opts.stdout(line)
+    for (const line of renderDetail(d, now, { color: opts.color === true })) opts.stdout(line)
   })
 }
 

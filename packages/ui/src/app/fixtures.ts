@@ -3,9 +3,18 @@
  * overview and the frames that change it, plus the analytics answers and
  * build timelines the JSON routes serve. Valid against the shared
  * projection's types, never produced by calling core, so the views test,
- * the catalog and the layout probe share one scripted frame source.
+ * the catalog and the layout probe share one scripted frame source. Status
+ * tones are looked up in the shared word table, never restated here.
  */
 import type { StepText } from '../../../core/src/cli/dashboard/row-text'
+import {
+  BUILD_STATUS_TONE,
+  HARVEST_STATUS_TONE,
+  type BuildStatusWord,
+  type DashboardStatus,
+  type HarvestStatusWord,
+  type StatusText,
+} from '../../../core/src/cli/dashboard/vocabulary'
 import type { TimelineSegment } from '../../../core/src/cli/dashboard/timeline'
 import type { StepDurationStat } from '../../../core/src/kernel/step-durations'
 import type {
@@ -48,6 +57,21 @@ const current = (label: string, sinceMs: number, extra: Partial<StepText> = {}):
 
 const merge = { text: 'merge auto', tone: 'ok' as const }
 
+/** A build row's status, its tone from the shared table. */
+const word = (status: DashboardStatus, w: BuildStatusWord, note?: string): StatusText => ({
+  status,
+  word: w,
+  tone: BUILD_STATUS_TONE[w],
+  ...(note !== undefined ? { note } : {}),
+})
+
+/** A harvest row's status, its tone from the shared table. */
+export const harvestWord = (status: DashboardStatus, w: HarvestStatusWord): StatusText => ({
+  status,
+  word: w,
+  tone: HARVEST_STATUS_TONE[w],
+})
+
 /** The long-title running row: a ticking verify step on its second attempt. */
 export const RUNNING_SLUG = 'resume-suspended-sessions-after-clean-stop'
 const running: WebBuildRow = {
@@ -56,7 +80,7 @@ const running: WebBuildRow = {
   title: 'Resume suspended sessions after a clean stop, keeping each harness native session',
   ticketUrl: 'https://github.com/acme/app/issues/1084',
   kind: 'work',
-  status: { status: 'running', word: 'RUNNING', tone: 'ok' },
+  status: word('running', 'RUNNING'),
   phase: 'verify:unit',
   flags: [],
   merge,
@@ -81,7 +105,7 @@ const blocked: WebBuildRow = {
   ticketId: '#1051',
   title: 'Copy archive refs into the store when the forge refuses them',
   kind: 'work',
-  status: { status: 'blocked', word: 'BLOCKED', tone: 'alert' },
+  status: word('blocked', 'BLOCKED'),
   phase: 'implement',
   flags: [],
   merge,
@@ -107,7 +131,7 @@ const waiting: WebBuildRow = {
   ticketId: '#1090',
   title: 'Show waits on the build page',
   kind: 'work',
-  status: { status: 'waiting', word: 'WAITING', tone: 'held' },
+  status: word('waiting', 'WAITING', 'on #1084, #1051'),
   flags: [],
   merge,
   target: { destination: 'main', distance: '+0' },
@@ -120,7 +144,7 @@ const integration: WebBuildRow = {
   ticketId: '#1073',
   title: 'Dispatcher web UI',
   kind: 'integration',
-  status: { status: 'collecting', word: 'COLLECTING', tone: 'live' },
+  status: word('collecting', 'COLLECTING'),
   phase: 'collect',
   flags: [],
   target: { destination: 'main', distance: '+12' },
@@ -142,11 +166,8 @@ const held: WebBuildRow = {
   ticketId: '#1093',
   title: 'Record forge rate limits per credential',
   kind: 'work',
-  status: { status: 'suspended', word: 'SUSPENDED', tone: 'held' },
-  flags: [
-    { term: 'held', tone: 'held' },
-    { term: 'paused', tone: 'held' },
-  ],
+  status: word('paused', 'PAUSED'),
+  flags: [],
   merge: { text: 'merge off', tone: 'pending' },
   target: { destination: 'main', distance: '+2' },
   tree: ['ab/record-forge-rate-limits · restack idle · verify pending · not ready to land'],
@@ -155,14 +176,82 @@ const held: WebBuildRow = {
   attention: [{ kind: 'setup-error', tone: 'alert', text: 'Janitor failing: worktree is locked' }],
 }
 
+/** Rows for the words no other fixture row shows, so the overview renders
+ * the whole build vocabulary (SPEC §14 "Status words"). */
+const vocabularyRows: WebBuildRow[] = [
+  {
+    slug: 'trim-session-transcripts',
+    ticketId: '#1094',
+    title: 'Trim session transcripts before upload',
+    kind: 'work',
+    status: word('pausing', 'PAUSING'),
+    phase: 'implement',
+    flags: [],
+    merge,
+    target: { destination: 'main', distance: '+1' },
+    steps: [done('plan', 6 * MIN), current('implement', 9 * MIN), pending('code-review')],
+    attention: [],
+  },
+  {
+    slug: 'retire-legacy-store-flag',
+    ticketId: '#1095',
+    title: 'Retire the legacy store flag',
+    kind: 'work',
+    status: word('aborting', 'ABORTING'),
+    flags: [],
+    merge,
+    target: { destination: 'main', distance: '+0' },
+    steps: [],
+    notice: { text: 'abort requested; waiting for running work to stop', tone: 'ok' },
+    attention: [],
+  },
+  {
+    slug: 'resume-after-answer',
+    ticketId: '#1096',
+    title: 'Resume answered builds ahead of new claims',
+    kind: 'work',
+    status: word('resuming', 'QUEUED', 'resume'),
+    flags: [],
+    merge,
+    target: { destination: 'main', distance: '+1' },
+    steps: [done('plan', 5 * MIN), pending('implement')],
+    attention: [],
+  },
+  {
+    slug: 'land-forge-merge-queue',
+    ticketId: '#1097',
+    title: 'Land through the forge merge queue',
+    kind: 'work',
+    status: word('running', 'MERGING'),
+    flags: [],
+    merge,
+    pr: { text: 'PR open', url: 'https://github.com/acme/app/pull/1097' },
+    target: { destination: 'main', distance: '+1' },
+    steps: [done('plan', 4 * MIN), done('implement', 18 * MIN), done('finalize', MIN)],
+    attention: [],
+  },
+  {
+    slug: 'drop-stale-preview-env',
+    ticketId: '#1098',
+    title: 'Drop the stale preview environment',
+    kind: 'work',
+    status: word('cleaning', 'CLEANING'),
+    flags: [],
+    merge,
+    steps: [],
+    notice: { text: 'running work stopped; abort cleanup pending or in progress', tone: 'pending' },
+    attention: [],
+  },
+]
+
 const queuedRows: WebBuildRow[] = [
   {
     slug: 'page-hosted-ticket-listing',
     ticketId: '#1101',
     title: 'Page the hosted ticket listing',
     kind: 'work',
-    status: { status: 'queued', word: 'QUEUED', tone: 'live' },
-    flags: [],
+    status: word('queued', 'STARTING'),
+    flags: [{ term: 'held', tone: 'held' }],
     merge,
     steps: [pending('plan'), pending('implement')],
     attention: [],
@@ -172,11 +261,11 @@ const queuedRows: WebBuildRow[] = [
     ticketId: '#1102',
     title: 'Split verify into ordered stages',
     kind: 'work',
-    status: { status: 'queued', word: 'QUEUED', tone: 'live' },
+    status: word('queued', 'STARTING'),
     flags: [],
     merge,
     steps: [pending('plan')],
-    notice: { text: 'next to launch when a slot opens', tone: 'live' },
+    notice: { text: 'workspace provisioning pending', tone: 'ok' },
     attention: [],
   },
 ]
@@ -221,9 +310,10 @@ const baseFrame: WebFrame = {
       counts: [
         { label: 'triage', value: '4' },
         { label: 'queue', value: '2' },
-        { label: 'active', value: '3/4' },
+        { label: 'active', value: '5/6' },
       ],
-      capacityNote: '(limit lowered from 6 while a handoff drains)',
+      capacityNote:
+        '(6 configured; 1 parked build waiting for a slot ahead of normal ticket claims: resume-after-answer)',
       gates: [
         { label: 'intake', word: 'OFF', tone: 'held' },
         { label: 'harvest', word: 'ON', tone: 'ok' },
@@ -254,19 +344,28 @@ const baseFrame: WebFrame = {
     ],
     harvest: {
       title: 'Harvest',
-      status: { status: 'running', word: 'RUNNING', tone: 'ok' },
+      status: harvestWord('running', 'HARVESTING'),
       observations: '14 observations',
       steps: [current('distill', 2 * MIN + 5000), pending('propose')],
     },
-    active: [running, blocked, waiting, integration, held],
+    active: [running, blocked, waiting, integration, held, ...vocabularyRows],
     queued: queuedRows,
     finished: finishedRows,
   },
 }
 
+/** A derived frame. Its active counter is recounted from the green rows,
+ * since a green status word means the build holds a slot (SPEC §14). */
 function withOverview(change: (o: NonNullable<WebFrame['overview']>) => void): WebFrame {
   const frame = overviewFrame()
-  change(frame.overview!)
+  const overview = frame.overview!
+  change(overview)
+  const held = [...overview.active, ...overview.queued].filter(
+    (row) => row.status.tone === 'ok',
+  ).length
+  overview.header.counts = overview.header.counts.map((count) =>
+    count.label === 'active' ? { ...count, value: `${held}/${count.value.split('/')[1]}` } : count,
+  )
   return frame
 }
 
@@ -275,7 +374,7 @@ function withOverview(change: (o: NonNullable<WebFrame['overview']>) => void): W
 export function stateChangedFrame(): WebFrame {
   return withOverview((o) => {
     const row = o.active[0]!
-    row.status = { status: 'paused', word: 'PAUSED', tone: 'held' }
+    row.status = word('paused', 'PAUSED')
     row.phase = 'finalize'
     row.steps = [
       ...row.steps.slice(0, 3),
@@ -292,7 +391,7 @@ export function attentionArrivedFrame(): WebFrame {
     'Verify fails on the unit suite because the fixture clock is a day ahead. Should the fixture move, or should the test pin its own clock? Either answer resumes the build.'
   return withOverview((o) => {
     const row = o.active[0]!
-    row.status = { status: 'blocked', word: 'BLOCKED', tone: 'alert' }
+    row.status = word('blocked', 'BLOCKED')
     row.attention = [{ kind: 'escalation', tone: 'alert', text: question }]
     o.attention.unshift({
       kind: 'escalation',
@@ -323,15 +422,13 @@ export function movedFrame(): WebFrame {
     const started = o.queued.shift()!
     o.active.push({
       ...started,
-      status: { status: 'running', word: 'RUNNING', tone: 'ok' },
+      status: word('running', 'RUNNING'),
       phase: 'plan',
       steps: [current('plan', 3000), pending('implement')],
     })
-    o.header.counts = [
-      { label: 'triage', value: '4' },
-      { label: 'queue', value: '1' },
-      { label: 'active', value: '3/4' },
-    ]
+    o.header.counts = o.header.counts.map((count) =>
+      count.label === 'queue' ? { ...count, value: '1' } : count,
+    )
   })
 }
 

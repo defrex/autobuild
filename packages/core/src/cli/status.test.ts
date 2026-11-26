@@ -913,7 +913,7 @@ describe('renderers', () => {
     expect(summary.status).toBe('running')
 
     const text = renderSummaries([summary], NOW, 'none').join('\n')
-    expect(text).toContain('running')
+    expect(text).toContain('STARTING')
     expect(text).toContain('expired')
     expect(text).not.toContain('\x1b')
 
@@ -1446,4 +1446,75 @@ test('builds and build status report slot state, and an older server reads as un
   expect(lines(requested)).toContain('  slot:     requested resume (urgent)')
   expect(lines(older)).toContain('  slot:     unknown')
   expect(lines(done).some((line) => line.startsWith('  slot:'))).toBe(false)
+})
+
+test('builds and build status print the status word and note, colored only when asked (#1339)', async () => {
+  const { reduceBuild } = await import('../kernel/reducer')
+  const { summarizeFrom, statusColor } = await import('./status')
+  const { stripAnsi } = await import('./dashboard/render')
+  const state = { ...reduceBuild([]), slotAdmittedSeq: 1, slotReleasedSeq: 2 }
+  const capacity = { record: record(), state, workspace: true }
+  const urgent = { ...state, priority: 'urgent' as const }
+  const requested = summarizeFrom(record(), urgent, NOW, { ...capacity, state: urgent })
+  expect(requested.statusWord).toEqual({ word: 'QUEUED', tone: 'live', note: 'urgent resume' })
+  const admitted = { ...state, slotReleasedSeq: 0 }
+  const held = summarizeFrom(record({ slug: 'held' }), admitted, NOW, {
+    ...capacity,
+    state: admitted,
+  })
+  expect(held.statusWord).toEqual({ word: 'STARTING', tone: 'ok' })
+  expect(held.status).toBe('queued')
+  // An older server's summary carries no word: it is chosen from what it does carry.
+  const { statusWord: _word, ...older } = JSON.parse(JSON.stringify(held))
+  const done = summarizeFrom(record({ slug: 'merged' }), { ...state, status: 'done' }, NOW)
+  expect(done).not.toHaveProperty('statusWord')
+  const toned = (slug: string, word: string, tone: string) => ({
+    ...held,
+    slug,
+    statusWord: { word, tone, ...(word === 'WAITING' ? { note: 'merge decision' } : {}) },
+  })
+  const summaries = [
+    requested,
+    held,
+    older,
+    done,
+    toned('w', 'WAITING', 'held'),
+    toned('b', 'BLOCKED', 'alert'),
+    toned('c', 'CLEANING', 'pending'),
+  ] as Parameters<typeof renderSummaries>[0]
+  const plain = renderSummaries(summaries, NOW, '')
+  expect(plain.map((line) => line.split(/\s{2,}/)[1])).toEqual([
+    'STATUS',
+    expect.stringMatching(/^QUEUED \(urgent resume\) /),
+    'STARTING',
+    'STARTING',
+    'done',
+    'WAITING (merge decision)',
+    'BLOCKED',
+    'CLEANING',
+  ])
+  expect(plain.join('\n')).not.toContain('\x1b')
+  const colored = renderSummaries(summaries, NOW, '', { color: true })
+  expect(colored.map(stripAnsi)).toEqual(plain)
+  for (const [index, code] of [
+    [1, '\x1b[36mQUEUED'],
+    [2, '\x1b[32mSTARTING'],
+    [5, '\x1b[33mWAITING'],
+    [6, '\x1b[31mBLOCKED'],
+    [7, '\x1b[2mCLEANING'],
+  ] as const)
+    expect(colored[index]).toContain(code)
+  expect(colored[4]).not.toContain('\x1b')
+  const detailLines = (summary: object, color?: boolean) =>
+    renderDetail({ ...detail(record(), [], NOW), ...summary }, NOW, { color })
+  expect(detailLines(requested)).toContain('  status:   QUEUED (urgent resume)')
+  expect(detailLines(requested, true)).toContain(
+    '  status:   \x1b[36mQUEUED\x1b[0m\x1b[2m (urgent resume)\x1b[0m',
+  )
+  expect(detailLines(requested).join('\n')).not.toContain('\x1b')
+
+  expect(statusColor({ interactive: true }, false)).toBe(true)
+  expect(statusColor({ interactive: true }, true)).toBe(false)
+  expect(statusColor({ interactive: false }, false)).toBe(false)
+  expect(statusColor(undefined, false)).toBe(false)
 })
