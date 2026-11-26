@@ -174,6 +174,7 @@ export function randomBuildItem(rand: Rand): readonly [string, Record<string, un
     () => ['observation.recorded', { id: 'o2', kind: 'refactor', summary: 's' }],
     () => ['session.started', { session: 's', role: 'r', runner: 'c', phase: 'plan' }],
     () => ['pipeline.settled', { cycle: 1 + Math.floor(rand() * 40) }],
+    () => ['slot.admitted', { request: 'resume' }],
   ]
   return pick(rand, templates)()
 }

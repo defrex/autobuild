@@ -1,6 +1,5 @@
 import { workTargetDistance } from './target-distance'
 import { openTicketWait, waitingOnLine } from '../../kernel/ticket-wait'
-import { migrationIdentity, ticketMigrationsReducer } from '../../kernel/ticket-migrations'
 import { openPrBackpressureReducer } from '../../kernel/open-pr-backpressure-state'
 import type { DashboardRollback } from './rollback'
 import type { DispatchUpgradeState } from '../../kernel/dispatch-upgrade'
@@ -1563,12 +1562,6 @@ export function buildDashboard(
     })),
     config.capacity,
     new Date(),
-    migrationIdentity(
-      Array.isArray(repositoryEvents)
-        ? ticketMigrationsReducer.reduce(repositoryEvents)
-        : repositoryEvents.ticketMigrations,
-      config.tickets.source,
-    ),
     {
       ...(Array.isArray(repositoryEvents)
         ? {}

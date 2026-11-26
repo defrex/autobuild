@@ -18,7 +18,6 @@ import { LocalAccountOwner, renewLocalAccounts } from '../accounts/local-owner'
 import { accountRedactor, redactAccountStore } from '../store/account-redaction'
 import { capturedBuildConfig } from '../processes/verify-cycle-config'
 import { ForgeRequestDeferred } from '../ports/forge-request-context'
-import { migrationIdentity } from '../kernel/ticket-migrations'
 import { recordRuntimeRollback } from './dispatch-handoff'
 import { syncRollbackRetention } from './dispatch-runtime-use'
 import { dirname as runtimeDirname } from 'node:path'
@@ -4318,10 +4317,6 @@ class DispatchLoop {
           buildSnapshot.capacityBuilds ?? [],
           configSnapshot.config.capacity,
           this.wiring.clock(),
-          migrationIdentity(
-            repositoryEvents.ticketMigrations,
-            configSnapshot.config.tickets.source,
-          ),
           {
             urgentClaims: urgentClaimDemand(repositoryEvents),
             openPrs: {

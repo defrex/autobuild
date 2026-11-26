@@ -7,7 +7,6 @@ import {
 } from '../kernel/ticket-starts'
 import { normalizeEffectiveConfigArtifact } from '../config/effective-artifact'
 import { OPERATOR_PRESENCE_TTL_MS, type OperatorPresence } from '../store/operator-presence'
-import { migrationIdentity } from '../kernel/ticket-migrations'
 import {
   dispatchUpgradeReducer,
   upgradeRunRecency,
@@ -748,17 +747,11 @@ export async function readRepositoryCapacity(
       restackDue: landingRestackDue(build.state, build.log),
     })
   }
-  return dispatchCapacity(
-    builds,
-    config.capacity,
-    now,
-    migrationIdentity(facts.ticketMigrations, config.tickets.source),
-    {
-      urgentClaims: urgentClaimDemand(facts),
-      startRequests: startClaimDemand(facts),
-      openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
-    },
-  )
+  return dispatchCapacity(builds, config.capacity, now, {
+    urgentClaims: urgentClaimDemand(facts),
+    startRequests: startClaimDemand(facts),
+    openPrs: { policy: config.policy, engaged: facts.openPrBackpressure !== undefined },
+  })
 }
 
 /**

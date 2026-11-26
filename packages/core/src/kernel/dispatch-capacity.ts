@@ -1,5 +1,4 @@
 import type { TicketStartPriority } from '../events/repository'
-import type { TicketRef } from '../ontology'
 import type { TicketPriority } from '../ports/types'
 import type { BuildRecord } from '../store/types'
 import type { BuildState } from './reducer'
@@ -7,7 +6,12 @@ import { integrationAdmissible, integrationNeedsRunner } from './integration-sta
 import { proposeAdmissible, proposeRunDue, proposeStarted } from './optimization-admission'
 import { waitParked, waitResumeDue } from './ticket-wait'
 import { nodeMeasurementDue, pendingMeasurementRequest } from './measurement'
-import { reopenRestart, reopenSpecPending, reopenUnsettled } from './reopen-state'
+import {
+  reopenRestart,
+  reopenSpecPending,
+  reopenUnsettled,
+  reviseSpecPending,
+} from './reopen-state'
 import type { PolicyConfig } from '../config/schema'
 import {
   backpressureExplanation,
@@ -16,17 +20,19 @@ import {
   type OpenPrBackpressure,
 } from './open-pr-backpressure'
 
-/** Repository-scoped, reduced facts. Provisioning reserves a slot before a workspace exists.
+/** Repository-scoped, reduced facts (SPEC §12 "What holds a slot").
  *
- * `capacity` counts builds running work. A leaf that holds no runner is
- * parked when it has finished its pipeline (settled, see `epilogueLeaf`) and
- * waits for a merge decision, merge gates or the forge, or when it waits on
- * other tickets (`waitParked`). A parked leaf holds no slot, though it keeps
- * its workspace. Every other unfinished leaf holds a slot, paused or blocked
- * on a question included. A reopened leaf (SPEC §15.7) stays a finished leaf,
- * so it re-enters through the same slot queue and, like a blocked reconcile,
- * holds no slot while it waits on a question. Nodes hold a slot only while
- * they need a runner. */
+ * A leaf takes a slot only by admission: its `build.created` (a ticket claim
+ * or start request) or the dispatcher's `slot.admitted`. It holds the slot
+ * while Autobuild owes its next move, whether or not a runner works, and
+ * releases it as soon as it waits on the outside world (`leafOutsideWait`): a
+ * human (an open escalation, an acknowledged pause, a `revise-spec` answer
+ * awaiting its revision, a merge decision or hold), another ticket, or the
+ * forge. Release follows state; acquisition never does, so a leaf whose
+ * outside wait ended asks for a slot (`slotRequest`) and holds none until it
+ * is admitted again. Runner liveness plays no part in a leaf's hold, and its
+ * workspace never counts. Nodes hold a slot only while they need a runner;
+ * their provisioning marker reserves one before a workspace exists. */
 export interface CapacityBuild {
   record: BuildRecord
   state: BuildState
@@ -36,14 +42,15 @@ export interface CapacityBuild {
   restackDue?: boolean
 }
 
-/** The runner a node or parked leaf has durably requested and does not yet
- * hold. `resume` is a leaf whose ticket wait ended; `reopen` is a leaf an
+/** The slot a node or a leaf that holds none has durably requested. `resume`
+ * is a leaf whose escalation was answered, whose pause was resumed, whose
+ * ticket wait ended or whose target was rewritten; `reopen` is a leaf an
  * operator reopened; `propose` is an optimization node's open, still
  * eligible proposal request. */
 export type SlotRequest = 'verification' | 'reconcile' | 'resume' | 'reopen' | 'propose'
 
-/** One node or parked leaf waiting for a slot. `priority` is omitted for
- * normal builds, and by an older server. */
+/** One node or leaf waiting for a slot. `priority` is omitted for normal
+ * builds, and by an older server. */
 export interface SlotWaiter {
   slug: string
   request: SlotRequest
@@ -56,12 +63,18 @@ export interface SlotWaiter {
  * start requests first); each tier keeps its own order. */
 export interface DispatchCapacity {
   configured: number
+  /** Builds holding a slot; never above `configured` once admitted by the
+   * slot arithmetic. */
   occupied: number
+  /** @deprecated Always `configured`. Kept for clients in the version window,
+   * which read it as the effective capacity. */
   effective: number
+  /** @deprecated Always empty. Kept for clients in the version window, which
+   * read it as the nodes borrowing descendant-held slots. */
   borrowingNodes: string[]
   /** Nodes waiting for a slot; omitted when none wait, and by an older server. */
   waitingNodes?: SlotWaiter[]
-  /** Parked leaves waiting for a slot; omitted when none wait, and by an older server. */
+  /** Leaves waiting for a slot; omitted when none wait, and by an older server. */
   waitingBuilds?: SlotWaiter[]
   /** Urgent ticket claims the latest admission scan found waiting for a slot
    * (`urgentClaimDemand`); they go ahead of normal parked work. Omitted when
@@ -119,7 +132,7 @@ function startsOf(capacity: DispatchCapacity, tiers: readonly TicketStartPriorit
   return tiers.reduce((sum, tier) => sum + (capacity.startRequests?.[tier] ?? 0), 0)
 }
 
-/** A provisioning marker or continuation, or a live lease: a runner is working. */
+/** A node's provisioning marker or continuation, or a live lease: a runner is working. */
 function runnerAllocated(build: CapacityBuild, now: Date): boolean {
   return (
     !!build.provisioning ||
@@ -164,14 +177,60 @@ function executionOpen(state: BuildState): boolean {
   return state.openExecution?.commandId !== undefined
 }
 
-/** A finished or ticket-waiting leaf with no runner working. It holds no
- * slot; its workspace does not count. */
-export function parkedLeaf(build: CapacityBuild, now: Date): boolean {
+/** What a leaf's slot depends on: its reduced state and whether the engine's
+ * awaiting-landing restack is due. */
+export type LeafSlotFacts = Pick<CapacityBuild, 'state' | 'restackDue'>
+
+/** The build was admitted since its last release (SPEC §12 "What holds a
+ * slot"). A value from an older server carries neither seq and reads as
+ * admitted. */
+export function slotAdmitted(
+  state: Pick<BuildState, 'slotAdmittedSeq' | 'slotReleasedSeq'>,
+): boolean {
+  return state.slotAdmittedSeq === undefined || state.slotAdmittedSeq > (state.slotReleasedSeq ?? 0)
+}
+
+/** A finished leaf still owes work before it waits for its merge decision:
+ * a rewritten target, a conflicted PR, a reopen (its spec publication
+ * included), a restack, an unsettled verify cycle or finalize, or a pending
+ * measurement request. */
+function epilogueWorkDue(build: LeafSlotFacts): boolean {
+  const { state } = build
   return (
-    (epilogueLeaf(build.state) || waitParked(build.state)) &&
-    !runnerAllocated(build, now) &&
-    !executionOpen(build.state)
+    state.targetRewrite !== undefined ||
+    state.prState === 'conflicted' ||
+    reopenSpecPending(state) ||
+    reopenUnsettled(state) ||
+    !!build.restackDue ||
+    epilogueUnsettled(state) ||
+    pendingMeasurementRequest(state) !== undefined
   )
+}
+
+/** A leaf waiting on the outside world, which holds no slot: an open
+ * escalation (an entered ticket wait's included), an acknowledged pause no
+ * resume was requested for, a `revise-spec` answer awaiting its revision, or
+ * a finished pipeline with no epilogue work due (a merge decision or hold,
+ * merge gates or the forge). */
+export function leafOutsideWait(build: LeafSlotFacts): boolean {
+  const { state } = build
+  if (state.status === 'blocked') return true
+  if (
+    state.status === 'paused' &&
+    (state.openEscalations.length > 0 ||
+      !state.pendingCommands.some((command) => command.command === 'resume'))
+  )
+    return true
+  if (reviseSpecPending(state)) return true
+  return epilogueLeaf(state) && !epilogueWorkDue(build)
+}
+
+/** A nonterminal leaf holds a slot when it does not wait on the outside world
+ * and was admitted since its last release. No lease, provisioning marker or
+ * open execution enters: a runner left over from before a release never
+ * takes the slot back. */
+export function leafHoldsSlot(build: LeafSlotFacts): boolean {
+  return !terminal(build.state) && !leafOutsideWait(build) && slotAdmitted(build.state)
 }
 
 /** An optimization node's workspace that no work owns: no runner, no open
@@ -224,7 +283,7 @@ export function settlementDue(state: BuildState): boolean {
 export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   const { state } = build
   if (terminal(state)) return false
-  if (state.kind !== 'node') return !parkedLeaf(build, now)
+  if (state.kind !== 'node') return leafHoldsSlot(build)
   return (
     !!state.nodeRestack?.conflict ||
     ((integrationNeedsRunner(state) || nodeMeasurementDue(state)) && allocated(build, now)) ||
@@ -232,17 +291,19 @@ export function occupiesCapacity(build: CapacityBuild, now: Date): boolean {
   )
 }
 
-/** A parked leaf's durable request for a runner, or undefined. */
-function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
+/** The durable slot request of a leaf that holds none and no longer waits on
+ * the outside world, or undefined. */
+export function leafSlotRequest(build: LeafSlotFacts): SlotRequest | undefined {
   const { state } = build
   if (
-    !parkedLeaf(build, now) ||
-    state.status === 'paused' ||
-    state.status === 'blocked' ||
+    terminal(state) ||
+    leafHoldsSlot(build) ||
+    leafOutsideWait(build) ||
+    // Mixed-version deferral withholds every decision, admission included.
     (state.compatibility?.decisiveFacts ?? 0) > 0
   )
     return undefined
-  // A parked leaf on a rewritten target needs a runner to leave the wait: it
+  // A leaf on a rewritten target needs a runner to leave the wait: it
   // reprovisions itself or raises its one escalation (SPEC §7.4).
   if (state.targetRewrite !== undefined) return 'resume'
   // A ticket wait parks a leaf mid-pipeline: it asks for a slot only once the
@@ -260,15 +321,17 @@ function leafSlotRequest(build: CapacityBuild, now: Date): SlotRequest | undefin
     pendingMeasurementRequest(state) !== undefined
   )
     return 'verification'
-  return undefined
+  // Every other leaf an outside wait released resumes where it stopped: an
+  // answered escalation, a resumed pause, a landed spec revision.
+  return epilogueLeaf(state) ? undefined : 'resume'
 }
 
-/** A node's or parked leaf's durable request for a runner it does not hold
- * yet. Admission outranks ticket claims of the same priority, so this never
+/** A node's or leaf's durable request for a slot it does not hold yet.
+ * Admission outranks ticket claims of the same priority, so this never
  * depends on when a tick saw it. */
 export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | undefined {
   const { state } = build
-  if (state.kind !== 'node') return leafSlotRequest(build, now)
+  if (state.kind !== 'node') return leafSlotRequest(build)
   if (
     state.status === 'done' ||
     state.status === 'aborted' ||
@@ -291,65 +354,10 @@ export function slotRequest(build: CapacityBuild, now: Date): SlotRequest | unde
   return undefined
 }
 
-type Identity = (ref: TicketRef, build?: string) => string
-const exactIdentity: Identity = (ref) => JSON.stringify([ref.source, ref.id])
-
-/** Follow accepted build identities, validating the source-qualified ticket at every edge. */
-function descendsFrom(
-  build: CapacityBuild,
-  node: string,
-  builds: Map<string, CapacityBuild>,
-  identity: Identity,
-): boolean {
-  const seen = new Set<string>([build.record.slug])
-  let target = build.state.target
-  while (target) {
-    if (seen.has(target.build)) return false
-    seen.add(target.build)
-    const parent = builds.get(target.build)
-    if (
-      parent?.state.kind !== 'node' ||
-      parent.record.repo !== build.record.repo ||
-      !parent.record.ticket ||
-      identity(parent.record.ticket, parent.record.slug) !==
-        identity(target.ticket, build.record.slug)
-    )
-      return false
-    if (parent.record.slug === node) return true
-    target = parent.state.target
-  }
-  return false
-}
-
-export function nodeCapacity(
-  builds: readonly CapacityBuild[],
-  node: string,
-  now: Date,
-  identity: Identity = exactIdentity,
-): {
-  occupied: number
-  excludedDescendants: string[]
-} {
-  const identities = new Map(builds.map((build) => [build.record.slug, build]))
-  const excludedDescendants: string[] = []
-  let occupied = 0
-  for (const build of identities.values()) {
-    if (build.record.slug === node || !occupiesCapacity(build, now)) continue
-    if (
-      (build.state.status === 'blocked' || build.state.status === 'paused') &&
-      descendsFrom(build, node, identities, identity)
-    )
-      excludedDescendants.push(build.record.slug)
-    else occupied++
-  }
-  return { occupied, excludedDescendants: excludedDescendants.sort() }
-}
-
 export function dispatchCapacity(
   builds: readonly CapacityBuild[],
   configured: number,
   now: Date,
-  identity: Identity = exactIdentity,
   options: {
     urgentClaims?: number
     openPrs?: OpenPrBackpressureInput
@@ -358,20 +366,6 @@ export function dispatchCapacity(
 ): DispatchCapacity {
   const unique = [...new Map(builds.map((build) => [build.record.slug, build])).values()]
   const occupied = unique.filter((build) => occupiesCapacity(build, now)).length
-  const borrowingNodes = unique
-    .filter((build) => {
-      if (build.state.kind !== 'node' || !occupiesCapacity(build, now)) return false
-      // A waiting conflict owns capacity too, but only allocated runner work borrows.
-      if (!allocated(build, now)) return false
-      const admission = nodeCapacity(unique, build.record.slug, now, identity)
-      return (
-        occupied > configured &&
-        admission.excludedDescendants.length > 0 &&
-        admission.occupied < configured
-      )
-    })
-    .map((build) => build.record.slug)
-    .sort()
   const waiting = (kind: 'node' | 'leaf') =>
     unique
       .flatMap((build) => {
@@ -395,8 +389,8 @@ export function dispatchCapacity(
   return {
     configured,
     occupied,
-    effective: borrowingNodes.length ? Math.max(configured, occupied) : configured,
-    borrowingNodes,
+    effective: configured,
+    borrowingNodes: [],
     ...(waitingNodes.length ? { waitingNodes } : {}),
     ...(waitingBuilds.length ? { waitingBuilds } : {}),
     ...(options.urgentClaims ? { urgentClaims: options.urgentClaims } : {}),
@@ -571,10 +565,6 @@ export function waitingExplanation(
 export function capacityExplanation(capacity?: DispatchCapacity): string {
   if (!capacity) return ''
   const clauses: string[] = []
-  if (capacity.borrowingNodes.length)
-    clauses.push(
-      `${capacity.borrowingNodes.length} node${capacity.borrowingNodes.length === 1 ? '' : 's'} using descendant-held slots: ${capacity.borrowingNodes.join(', ')}`,
-    )
   const waiting = waitingExplanation(capacity)
   if (waiting) clauses.push(waiting)
   const backpressure = backpressureExplanation(capacity.backpressure)

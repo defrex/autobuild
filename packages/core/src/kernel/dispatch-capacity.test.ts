@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { DISPATCHER, KERNEL } from '../events/envelope'
+import { validateEventWrite, type AbEvent } from '../events/catalog'
 import {
   commandObjective,
   OPTIMIZATION_SHA,
@@ -13,7 +14,6 @@ import {
   epilogueLeaf,
   epilogueUnsettled,
   intakeCapacity,
-  nodeCapacity,
   occupiesCapacity,
   reservedAhead,
   settlementDue,
@@ -46,6 +46,8 @@ function build(
     },
     state: {
       ...reduceBuild([]),
+      // Admitted at creation (`build.created`, seq 1).
+      slotAdmittedSeq: 1,
       kind,
       status,
       ...(parent ? { target: { build: parent, ticket: { source: 'file', id: parent } } } : {}),
@@ -60,71 +62,24 @@ function conflict(slug: string): CapacityBuild {
   return node
 }
 
-test('capacity five: two unrelated builds, three blocked descendants, and a reconcile node', () => {
+test('blocked and paused descendants hold no slot, so occupancy never exceeds configured', () => {
   const builds = [
     conflict('node'),
+    conflict('other'),
     build('a'),
-    build('b'),
+    build('b', 'work', 'paused', 'node'),
     ...['c', 'd', 'e'].map((id) => build(id, 'work', 'blocked', 'node')),
-  ]
-  expect(nodeCapacity(builds, 'node', now)).toEqual({
-    occupied: 2,
-    excludedDescendants: ['c', 'd', 'e'],
-  })
-  expect(dispatchCapacity(builds, 5, now)).toEqual({
-    configured: 5,
-    occupied: 6,
-    effective: 6,
-    borrowingNodes: ['node'],
-  })
-  expect(dispatchCapacity(builds.slice(1), 5, now).occupied).toBe(5)
-})
-
-test('nested accepted ancestry and paused descendants qualify; running descendants and unrelated load count', () => {
-  const builds = [
-    conflict('node'),
-    build('nested', 'node', 'collecting', 'node'),
-    build('paused', 'work', 'paused', 'nested'),
-    build('running', 'work', 'running', 'node'),
-    build('unrelated', 'work', 'blocked'),
-  ]
-  expect(nodeCapacity(builds, 'node', now)).toEqual({
-    occupied: 2,
-    excludedDescendants: ['paused'],
-  })
-  builds[1]!.state.target = undefined
-  expect(nodeCapacity(builds, 'node', now).excludedDescendants).toEqual([])
-})
-
-for (const malformed of ['missing', 'foreign', 'cycle'] as const)
-  test(`conservative ancestry: ${malformed}`, () => {
-    const node = conflict('node')
-    const nested = build('nested', 'node', 'collecting', 'node')
-    const child = build('child', 'work', 'blocked', 'nested')
-    if (malformed === 'missing') child.state.target!.build = 'absent'
-    if (malformed === 'foreign') child.state.target!.ticket.source = 'linear'
-    if (malformed === 'cycle')
-      nested.state.target = { build: 'nested', ticket: nested.record.ticket! }
-    expect(nodeCapacity([node, nested, child], 'node', now).excludedDescendants).toEqual([])
-  })
-
-test('terminal and idle nodes are free; duplicate identities count once; unrelated saturation prevents admission', () => {
-  const node = conflict('node')
-  const builds = [
-    node,
     build('idle', 'node', 'collecting'),
     build('done', 'work', 'done'),
-    ...['a', 'b', 'c', 'd', 'e'].map((id) => build(id)),
   ]
-  expect(nodeCapacity(builds, 'node', now).occupied).toBe(5)
-  expect(dispatchCapacity([...builds, builds[3]!], 5, now).occupied).toBe(6)
-  expect(dispatchCapacity(builds, 5, now).borrowingNodes).toEqual([])
-})
-
-test('active unrelated nodes count, even when another node excludes their blocked children', () => {
-  const builds = [conflict('first'), conflict('second'), build('child', 'work', 'blocked', 'first')]
-  expect(nodeCapacity(builds, 'first', now).occupied).toBe(1)
-  expect(nodeCapacity(builds, 'second', now).occupied).toBe(2)
+  expect(dispatchCapacity(builds, 3, now)).toEqual({
+    configured: 3,
+    occupied: 3,
+    effective: 3,
+    borrowingNodes: [],
+  })
+  // Duplicate identities count once.
+  expect(dispatchCapacity([...builds, builds[2]!], 3, now).occupied).toBe(3)
 })
 
 test('an idle node lease does not occupy execution capacity', () => {
@@ -164,42 +119,18 @@ test('verification reserves occupancy with workspace, provisioning or live lease
   expect(occupiesCapacity(node, now)).toBe(true)
 })
 
-test('pending verification may exclude paused descendants but active unrelated nodes consume the next admission slot', () => {
+test('pending verification counts every slot holder; a paused descendant holds none', () => {
   const first = verifying('first')
   const second = verifying('second')
-  const builds = [first, second, build('child', 'work', 'paused', 'first')]
-  expect(nodeCapacity(builds, 'first', now).occupied).toBe(0)
   first.provisioning = true
-  expect(nodeCapacity(builds, 'second', now).occupied).toBe(2)
+  const builds = [first, second, build('child', 'work', 'paused', 'first')]
   expect(dispatchCapacity(builds, 1, now)).toEqual({
     configured: 1,
-    occupied: 2,
-    effective: 2,
-    borrowingNodes: ['first'],
+    occupied: 1,
+    effective: 1,
+    borrowingNodes: [],
     waitingNodes: [{ slug: 'second', request: 'verification' }],
   })
-})
-
-test('migration normalization joins remapped frozen ancestry on both sides without changing records', async () => {
-  const { migrationIdentity } = await import('./ticket-migrations')
-  const node = conflict('node')
-  const child = build('child', 'work', 'paused', 'node')
-  node.record.ticket = { source: 'linear', id: 'OLD-NODE' }
-  const original = structuredClone(node.record)
-  const normalize = migrationIdentity(
-    {
-      migrations: [
-        { identity: 'cutover', from: 'linear', to: 'file', mapping: { 'OLD-NODE': 'node' } },
-      ],
-    },
-    'file',
-  )
-  expect(nodeCapacity([node, child], 'node', now).excludedDescendants).toEqual([])
-  expect(nodeCapacity([node, child], 'node', now, normalize).excludedDescendants).toEqual(['child'])
-  child.state.target!.ticket = { source: 'linear', id: 'OLD-NODE' }
-  node.record.ticket = { source: 'file', id: 'node' }
-  expect(nodeCapacity([node, child], 'node', now, normalize).excludedDescendants).toEqual(['child'])
-  expect(original.ticket).toEqual({ source: 'linear', id: 'OLD-NODE' })
 })
 
 test('a node awaiting verification reserves one intake slot without occupying one', () => {
@@ -213,7 +144,6 @@ test('a node awaiting verification reserves one intake slot without occupying on
     waitingNodes: [{ slug: 'node', request: 'verification' }],
   })
   expect(intakeCapacity(capacity)).toBe(0)
-  expect(nodeCapacity(builds, 'node', now).occupied).toBe(2)
 })
 
 test('a node holding its workspace, provisioning or live lease is occupied, not waiting', () => {
@@ -278,7 +208,7 @@ test('an unallocated conflict node waits for reconcile without being subtracted 
   expect(slotRequest(node, now)).toBeUndefined()
 })
 
-test('capacity wording covers waiting, borrowing, both and a legacy projection', () => {
+test('capacity wording covers waiting and ignores legacy borrowing', () => {
   const base: DispatchCapacity = {
     configured: 2,
     occupied: 2,
@@ -293,20 +223,10 @@ test('capacity wording covers waiting, borrowing, both and a legacy projection',
       waitingNodes: [{ slug: 'n', request: 'verification' }],
     }),
   ).toBe(' (2 configured; 1 node waiting for a slot ahead of normal ticket claims: n)')
-  expect(capacityExplanation({ ...base, borrowingNodes: ['b'] })).toBe(
-    ' (2 configured; 1 node using descendant-held slots: b)',
-  )
-  expect(
-    capacityExplanation({
-      ...base,
-      borrowingNodes: ['b'],
-      waitingNodes: [
-        { slug: 'm', request: 'reconcile' },
-        { slug: 'n', request: 'verification' },
-      ],
-    }),
-  ).toBe(
-    ' (2 configured; 1 node using descendant-held slots: b; 2 nodes waiting for a slot ahead of normal ticket claims: m, n)',
+  // An older server's projection may still name borrowing nodes and a
+  // higher effective capacity; neither is rendered.
+  expect(capacityExplanation({ ...base, occupied: 3, effective: 3, borrowingNodes: ['b'] })).toBe(
+    '',
   )
   expect(slotWaitText('verification')).toBe(
     'verification waiting for a slot ahead of normal ticket claims',
@@ -314,14 +234,16 @@ test('capacity wording covers waiting, borrowing, both and a legacy projection',
   expect(intakeCapacity(base)).toBe(0)
 })
 
-/** A leaf past `finalize.completed` at seq 10, settled at `settled` when given. */
+/** A leaf past `finalize.completed` at seq 10, settled at `settled` when
+ * given (its `pipeline.settled` at seq 11 releases the slot). `admitted`
+ * records a later `slot.admitted` at seq 12. */
 function finished(
   slug: string,
   opts: {
     settled?: number
     status?: CapacityBuild['state']['status']
     lease?: boolean
-    provisioning?: boolean
+    admitted?: boolean
   } = {},
 ): CapacityBuild {
   const leaf = build(slug, 'work', opts.status ?? 'running')
@@ -329,50 +251,61 @@ function finished(
   leaf.state.finalizeCompletedSeq = 10
   leaf.state.prState = 'open'
   leaf.state.verify = { ...leaf.state.verify, cycleSince: 4 }
-  if (opts.settled !== undefined) leaf.state.pipelineSettled = opts.settled
+  if (opts.settled !== undefined) {
+    leaf.state.pipelineSettled = opts.settled
+    leaf.state.slotReleasedSeq = 11
+  }
+  if (opts.admitted) leaf.state.slotAdmittedSeq = 12
   if (opts.lease)
     leaf.record.lease = {
       holder: 'runner',
       expiresAt: new Date(now.getTime() + 60_000).toISOString(),
     } as never
-  if (opts.provisioning) leaf.provisioning = true
   return leaf
 }
 
-test('a leaf past finalize.completed keeps its slot until settlement, paused or blocked too', () => {
-  for (const status of ['running', 'paused', 'blocked'] as const) {
-    const leaf = finished('a', { status })
-    expect(epilogueLeaf(leaf.state)).toBe(false)
-    expect(occupiesCapacity(leaf, now)).toBe(true)
-    expect(slotRequest(leaf, now)).toBeUndefined()
-    expect(settlementDue(leaf.state)).toBe(true)
+test('a leaf past finalize.completed keeps its slot until settlement; paused or blocked it holds none', () => {
+  const leaf = finished('a')
+  expect(epilogueLeaf(leaf.state)).toBe(false)
+  expect(occupiesCapacity(leaf, now)).toBe(true)
+  expect(slotRequest(leaf, now)).toBeUndefined()
+  expect(settlementDue(leaf.state)).toBe(true)
+  for (const status of ['paused', 'blocked'] as const) {
+    const waiting = finished('a', { status })
+    expect(occupiesCapacity(waiting, now)).toBe(false)
+    expect(slotRequest(waiting, now)).toBeUndefined()
   }
 })
 
-test('a settled leaf with no runner is parked and free; a runner makes it occupy', () => {
+test('a settled leaf holds no slot whatever its runner; only admission makes it occupy', () => {
   const parked = finished('a', { settled: 10 })
   expect(settlementKey(parked.state)).toBe(10)
   expect(epilogueLeaf(parked.state)).toBe(true)
   expect(settlementDue(parked.state)).toBe(false)
   expect(occupiesCapacity(parked, now)).toBe(false)
   expect(slotRequest(parked, now)).toBeUndefined()
-  expect(occupiesCapacity(finished('a', { settled: 10, lease: true }), now)).toBe(true)
-  expect(occupiesCapacity(finished('a', { settled: 10, provisioning: true }), now)).toBe(true)
-  const expired = finished('a', { settled: 10 })
-  expired.record.lease = { holder: 'r', expiresAt: '2026-10-20T14:00:00Z' } as never
-  expect(occupiesCapacity(expired, now)).toBe(false)
-  // An open provider-observable execution holds its runner past lease expiry
-  // until its end is recorded; a local one's liveness is its lease.
-  const execution = { provider: 'p', workspaceRef: 'w', instance: 'i', seq: 12 }
-  expired.state.openExecution = { ...execution, commandId: 'cmd' }
-  expect(occupiesCapacity(expired, now)).toBe(true)
-  expect(slotRequest({ ...expired, restackDue: true }, now)).toBeUndefined()
-  expired.state.openExecution = execution
-  expect(occupiesCapacity(expired, now)).toBe(false)
+  // A live lease or open execution left from before the release (a
+  // countermanded pause acknowledgement, say) never takes the slot back.
+  const leased = finished('a', { settled: 10, lease: true })
+  leased.state.prState = 'conflicted'
+  leased.state.openExecution = {
+    provider: 'p',
+    workspaceRef: 'w',
+    instance: 'i',
+    seq: 12,
+    commandId: 'cmd',
+  }
+  expect(occupiesCapacity(leased, now)).toBe(false)
+  expect(slotRequest(leased, now)).toBe('reconcile')
+  // Admitted for its reconcile, it holds through relaunches, runner or not.
+  const admitted = finished('a', { settled: 10, admitted: true })
+  admitted.state.prState = 'conflicted'
+  expect(occupiesCapacity(admitted, now)).toBe(true)
+  expect(slotRequest(admitted, now)).toBeUndefined()
   for (const status of ['paused', 'blocked'] as const) {
     const leaf = finished('a', { settled: 10, status })
-    expect(occupiesCapacity(leaf, now)).toBe(false)
     leaf.state.prState = 'conflicted'
+    expect(occupiesCapacity(leaf, now)).toBe(false)
     expect(slotRequest(leaf, now)).toBeUndefined()
   }
 })
@@ -389,13 +322,14 @@ test('held, consented and auto-landing settled leaves are all free', () => {
   }
 })
 
-test('a spec revision after settlement makes the leaf unfinished again', () => {
+test('a spec revision after settlement makes the leaf unfinished: it resumes through admission', () => {
   const leaf = finished('a', { settled: 10 })
-  leaf.state.restartSince = 10
-  expect(epilogueLeaf(leaf.state)).toBe(false)
-  expect(occupiesCapacity(leaf, now)).toBe(true)
-  expect(settlementDue(leaf.state)).toBe(false)
   leaf.state.restartSince = 12
+  expect(epilogueLeaf(leaf.state)).toBe(false)
+  expect(settlementDue(leaf.state)).toBe(false)
+  expect(occupiesCapacity(leaf, now)).toBe(false)
+  expect(slotRequest(leaf, now)).toBe('resume')
+  leaf.state.slotAdmittedSeq = 13
   expect(occupiesCapacity(leaf, now)).toBe(true)
 })
 
@@ -412,20 +346,19 @@ test('a parked leaf requests reconcile, a due restack, or verification for an un
   expect(epilogueUnsettled(reverify.state)).toBe(true)
   expect(settlementDue(reverify.state)).toBe(true)
   expect(slotRequest(reverify, now)).toBe('verification')
-  // Pause, resume and runner exits write no settlement: still unsettled.
   reverify.state.status = 'paused'
   expect(slotRequest(reverify, now)).toBeUndefined()
   reverify.state.status = 'running'
   expect(slotRequest(reverify, now)).toBe('verification')
-  // Settlement at the new key clears it.
-  reverify.state.pipelineSettled = 20
+  // Admitted, the re-verify holds its slot until it settles again.
+  reverify.state.slotAdmittedSeq = 21
   expect(slotRequest(reverify, now)).toBeUndefined()
+  expect(occupiesCapacity(reverify, now)).toBe(true)
+  reverify.state.pipelineSettled = 20
+  reverify.state.slotReleasedSeq = 22
+  expect(slotRequest(reverify, now)).toBeUndefined()
+  expect(occupiesCapacity(reverify, now)).toBe(false)
   expect(settlementDue(reverify.state)).toBe(false)
-  // A running reconcile holds a lease: occupied, not waiting.
-  const running = finished('d', { settled: 10, lease: true })
-  running.state.prState = 'conflicted'
-  expect(slotRequest(running, now)).toBeUndefined()
-  expect(occupiesCapacity(running, now)).toBe(true)
 })
 
 test('a deferred parked leaf makes no request; a target-rewritten one resumes unless blocked', () => {
@@ -524,10 +457,8 @@ describe('slot admission order', () => {
       { slug: 'u', request: 'verification', priority: 'urgent' },
     ])
     expect(capacity.urgentClaims).toBeUndefined()
-    expect(dispatchCapacity([], 2, now, undefined, { urgentClaims: 2 }).urgentClaims).toBe(2)
-    expect(dispatchCapacity([], 2, now, undefined, { urgentClaims: 0 })).not.toHaveProperty(
-      'urgentClaims',
-    )
+    expect(dispatchCapacity([], 2, now, { urgentClaims: 2 }).urgentClaims).toBe(2)
+    expect(dispatchCapacity([], 2, now, { urgentClaims: 0 })).not.toHaveProperty('urgentClaims')
   })
 
   test('urgent work reserves ahead of normal parked work, never the reverse', () => {
@@ -572,7 +503,7 @@ describe('slot admission order', () => {
   })
 
   test('one free slot: urgent claims outrank normal parked work', () => {
-    const capacity = dispatchCapacity([reverify('n')], 1, now, undefined, { urgentClaims: 1 })
+    const capacity = dispatchCapacity([reverify('n')], 1, now, { urgentClaims: 1 })
     const admitted = (slug: string, priority: 'urgent' | 'normal') =>
       capacity.occupied + reservedAhead(capacity, { slug, priority }) < capacity.configured
     expect(admitted('n', 'normal')).toBe(false)
@@ -617,17 +548,16 @@ describe('slot admission order', () => {
         {},
       )
       expect(
-        dispatchCapacity([], 2, now, undefined, { startRequests: { manual: 1, urgent: 0 } })
-          .startRequests,
+        dispatchCapacity([], 2, now, { startRequests: { manual: 1, urgent: 0 } }).startRequests,
       ).toEqual({ manual: 1 })
-      expect(dispatchCapacity([], 2, now, undefined, { startRequests: {} })).not.toHaveProperty(
+      expect(dispatchCapacity([], 2, now, { startRequests: {} })).not.toHaveProperty(
         'startRequests',
       )
     })
 
     for (const configured of [1, 2])
       test(`capacity ${configured}: a manual request goes ahead of urgent parked work`, () => {
-        const capacity = dispatchCapacity([urgent(reverify('u'))], configured, now, undefined, {
+        const capacity = dispatchCapacity([urgent(reverify('u'))], configured, now, {
           startRequests: { manual: 1 },
         })
         expect(reservedAhead(capacity, { slug: 'u', priority: 'urgent' })).toBe(1)
@@ -638,13 +568,13 @@ describe('slot admission order', () => {
 
     for (const configured of [1, 2])
       test(`capacity ${configured}: an urgent request waits for urgent parked work only`, () => {
-        const behindUrgent = dispatchCapacity([urgent(reverify('u'))], configured, now, undefined, {
+        const behindUrgent = dispatchCapacity([urgent(reverify('u'))], configured, now, {
           startRequests: { urgent: 1 },
         })
         expect(startCapacity(behindUrgent, {}, 'urgent')).toBe(configured - 1)
         expect(admitted(behindUrgent, 'u', 'urgent')).toBe(true)
         expect(startCapacity(behindUrgent, { settled: new Set(['u']) }, 'urgent')).toBe(configured)
-        const aheadOfNormal = dispatchCapacity([reverify('n')], configured, now, undefined, {
+        const aheadOfNormal = dispatchCapacity([reverify('n')], configured, now, {
           startRequests: { urgent: 1 },
           urgentClaims: 1,
         })
@@ -657,7 +587,7 @@ describe('slot admission order', () => {
 
     for (const configured of [1, 2])
       test(`capacity ${configured}: a normal request waits for normal parked work and urgent claims`, () => {
-        const capacity = dispatchCapacity([reverify('n')], configured, now, undefined, {
+        const capacity = dispatchCapacity([reverify('n')], configured, now, {
           startRequests: { normal: 1 },
         })
         expect(startCapacity(capacity, {}, 'normal')).toBe(configured - 1)
@@ -671,7 +601,7 @@ describe('slot admission order', () => {
       })
 
     test('every tier reserves ahead of the ones below it', () => {
-      const capacity = dispatchCapacity([], 3, now, undefined, {
+      const capacity = dispatchCapacity([], 3, now, {
         startRequests: { manual: 1, urgent: 1, normal: 1 },
       })
       expect(startCapacity(capacity, {}, 'manual')).toBe(3)
@@ -1021,4 +951,170 @@ test('progress and proposer share workspace ownership and admission priority', (
   expect(strandedNodeWorkspace(node, now)).toBe(false)
   delete optimization.progressQueue
   expect(strandedNodeWorkspace(node, now)).toBe(true)
+})
+
+describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
+  const at = new Date('2026-11-26T12:00:00Z')
+  const human = { kind: 'human', user: 'aron' } as const
+  const agent = { kind: 'agent', role: 'r', session: 's' } as const
+  type Write = { actor: object; type: string; payload: object }
+  const write = (type: string, payload: object = {}): Write => {
+    const actor =
+      type.startsWith('build.') && type.endsWith('-requested')
+        ? human
+        : type === 'escalation.answered'
+          ? human
+          : type === 'escalation.raised'
+            ? agent
+            : type === 'build.created' || type === 'slot.admitted' || type === 'execution.started'
+              ? DISPATCHER
+              : KERNEL
+    return { actor, type, payload }
+  }
+  const created = write('build.created', {
+    ticket: { source: 'file', id: 'leaf' },
+    repo: 'repo',
+    baseBranch: 'main',
+  })
+  const attached = write('runner.attached', { instance: 'runner-1', host: 'local' })
+  const raised = write('escalation.raised', {
+    id: 'esc',
+    phase: 'implement',
+    round: 1,
+    source: 'agent',
+    question: 'which API?',
+  })
+  const answer = (resolution = 'guidance') =>
+    write('escalation.answered', { id: 'esc', answer: 'the new one', resolution })
+  const admitted = write('slot.admitted', { request: 'resume' })
+  const execution = write('execution.started', {
+    provider: 'vercel-sandbox',
+    workspaceRef: 'ws',
+    instance: 'i',
+    commandId: 'cmd',
+  })
+  function leaf(slug: string, writes: Write[], lease?: 'live' | 'expired'): CapacityBuild {
+    const events = [created, ...writes].map((entry, index) => ({
+      build: slug,
+      seq: index + 1,
+      ts: at.toISOString(),
+      ...validateEventWrite(entry as never),
+    })) as AbEvent[]
+    return {
+      record: {
+        slug,
+        repo: 'repo',
+        ticket: { source: 'file', id: slug },
+        createdAt: at.toISOString(),
+        updatedAt: at.toISOString(),
+        ...(lease
+          ? {
+              lease: {
+                holder: 'runner',
+                expiresAt: new Date(at.getTime() + (lease === 'live' ? 60_000 : -1)).toISOString(),
+              },
+            }
+          : {}),
+      },
+      state: reduceBuild(events),
+      workspace: true,
+    }
+  }
+  const holds = (build: CapacityBuild) => occupiesCapacity(build, at)
+  const request = (build: CapacityBuild) => slotRequest(build, at)
+
+  test('an acknowledged pause holds no slot; a resumed one waits for admission', () => {
+    const paused = [attached, write('build.pause-requested'), write('build.paused')]
+    expect(holds(leaf('a', paused))).toBe(false)
+    expect(request(leaf('a', paused))).toBeUndefined()
+    // With capacity 1, a ready ticket is claimed while the build stays paused.
+    expect(intakeCapacity(dispatchCapacity([leaf('a', paused)], 1, at))).toBe(1)
+    const resumed = [...paused, write('build.resume-requested')]
+    expect(holds(leaf('a', resumed))).toBe(false)
+    expect(request(leaf('a', resumed))).toBe('resume')
+    expect(holds(leaf('a', [...resumed, admitted]))).toBe(true)
+    expect(holds(leaf('a', [...resumed, admitted, write('build.resumed')]))).toBe(true)
+  })
+
+  test('a leaf blocked in implement holds no slot; answered, it waits as resume until admitted', () => {
+    expect(holds(leaf('a', [attached, raised]))).toBe(false)
+    expect(request(leaf('a', [attached, raised]))).toBeUndefined()
+    const answered = [attached, raised, answer()]
+    expect(holds(leaf('a', answered))).toBe(false)
+    expect(request(leaf('a', answered))).toBe('resume')
+    expect(holds(leaf('a', [...answered, admitted]))).toBe(true)
+    expect(request(leaf('a', [...answered, admitted]))).toBeUndefined()
+    // A new question after admission releases the slot again.
+    expect(holds(leaf('a', [...answered, admitted, raised]))).toBe(false)
+  })
+
+  test('a revise-spec answer holds none and requests none until its revision lands', () => {
+    const revise = [attached, raised, answer('revise-spec')]
+    expect(holds(leaf('a', revise))).toBe(false)
+    expect(request(leaf('a', revise))).toBeUndefined()
+    const revised = [
+      ...revise,
+      write('spec.revised', { artifact: { kind: 'spec', rev: 1 }, escalation: 3 }),
+    ]
+    expect(holds(leaf('a', revised))).toBe(false)
+    expect(request(leaf('a', revised))).toBe('resume')
+  })
+
+  test('an admitted leaf whose runner never attached, crashed or lost its lease holds its slot', () => {
+    const answered = [attached, raised, answer(), admitted]
+    for (const lease of [undefined, 'expired'] as const) {
+      const build = leaf('a', answered, lease)
+      expect(holds(build)).toBe(true)
+      expect(request(build)).toBeUndefined()
+      expect(intakeCapacity(dispatchCapacity([build], 1, at))).toBe(0)
+    }
+    // A freshly claimed leaf is admitted by its build.created alone.
+    expect(holds(leaf('fresh', []))).toBe(true)
+  })
+
+  test('a requested pause or abort keeps the slot until acknowledged', () => {
+    for (const command of ['build.pause-requested', 'build.abort-requested'])
+      expect(holds(leaf('a', [attached, write(command)], 'live'))).toBe(true)
+    expect(
+      holds(leaf('a', [attached, write('build.pause-requested'), write('build.paused')])),
+    ).toBe(false)
+  })
+
+  test('liveness from before an answer never re-admits (f_43f94fec)', () => {
+    const busy = leaf('busy', [attached])
+    const answered = [attached, raised, answer()]
+    const variants = [
+      leaf('a', answered, 'live'),
+      leaf('a', [...answered, execution], 'expired'),
+      // An ungated pause acknowledgement launched after the answer.
+      leaf('a', [...answered, write('build.pause-requested'), execution], 'live'),
+    ]
+    for (const build of variants) {
+      expect(holds(build)).toBe(false)
+      const capacity = dispatchCapacity([busy, build], 1, at)
+      expect(capacity.occupied).toBe(1)
+      // It waits as a resume request: no ticket claim fits either.
+      expect(capacity.waitingBuilds).toEqual([{ slug: 'a', request: 'resume' }])
+      expect(intakeCapacity(capacity)).toBe(-1)
+    }
+  })
+
+  test('a value from an older server, without slot seqs, reads as admitted', () => {
+    const legacy = (build: CapacityBuild) => {
+      delete build.state.slotAdmittedSeq
+      delete build.state.slotReleasedSeq
+      return build
+    }
+    expect(holds(legacy(leaf('a', [attached])))).toBe(true)
+    expect(holds(legacy(leaf('a', [attached, raised])))).toBe(false)
+    expect(holds(legacy(leaf('a', [attached, raised, answer()])))).toBe(true)
+  })
+
+  test('the wire keeps effective and borrowingNodes for clients in the version window', () => {
+    const node = conflict('node')
+    const blocked = leaf('child', [attached, raised])
+    blocked.state.target = { build: 'node', ticket: { source: 'file', id: 'node' } }
+    const wire = JSON.parse(JSON.stringify(dispatchCapacity([node, blocked], 1, at)))
+    expect(wire).toEqual({ configured: 1, occupied: 1, effective: 1, borrowingNodes: [] })
+  })
 })

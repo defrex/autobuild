@@ -111,7 +111,8 @@ import {
   dispatchCapacity,
   epilogueLeaf,
   intakeCapacity,
-  nodeCapacity,
+  leafHoldsSlot,
+  leafSlotRequest,
   occupiesCapacity,
   reservedAhead,
   settlementDue,
@@ -1992,7 +1993,7 @@ export class Dispatcher {
     // checked, needs the pass.
     const now = this.deps.clock()
     const measured = await this.capacityBuilds(launched, true)
-    const projection = dispatchCapacity(measured, config.capacity, now, undefined, {
+    const projection = dispatchCapacity(measured, config.capacity, now, {
       urgentClaims: this.urgentClaims(),
       startRequests: this.startClaims(),
     })
@@ -4162,16 +4163,21 @@ export class Dispatcher {
     return priority === 'normal' && this.urgentBoundaryOpen() ? 'defer' : 'admit'
   }
 
-  /** Whether a leaf may reserve a runner now. A leaf that has not finished its
-   * pipeline already holds its slot, and abort and pause acknowledgements park
-   * at once, so only a finished leaf that must run again is gated: it needs
-   * a free slot among every other build, after urgent work ahead of it. A
-   * denial or deferral is recorded only in memory, for this tick's intake
-   * reservation; a deferral is retried after this tick's dispatch. */
+  /** Whether a leaf may reserve a runner now (SPEC §12 "What holds a slot").
+   * A leaf that holds its slot is admitted at once, and so are abort and pause
+   * acknowledgements, which are never gated and confer no slot. Every other
+   * leaf needs a free slot among every other build, after the work ahead of
+   * it. Admission is the durable `slot.admitted` fact, appended on the state
+   * this decision read before any lease claim, provisioning or launch, so a
+   * crash after it keeps the slot; runner liveness never admits. A denial or
+   * deferral is recorded only in memory, for this tick's intake reservation;
+   * a deferral is retried after this tick's dispatch. */
   private async leafAdmission(slug: string): Promise<'admit' | 'wait' | 'defer'> {
-    const { state } = await this.store.buildFacts(slug)
+    const facts = await this.store.buildFacts(slug)
+    const { state } = facts
+    const self = { state, restackDue: landingRestackDue(state, facts.log) }
     if (
-      !(epilogueLeaf(state) || waitParked(state)) ||
+      leafHoldsSlot(self) ||
       state.pendingCommands.some(
         (command) => command.command === 'abort' || command.command === 'pause',
       )
@@ -4182,18 +4188,31 @@ export class Dispatcher {
     const capacity = this.deps.config.capacity
     const now = this.deps.clock()
     const priority = buildPriority(state)
-    const outcome = this.slotAdmission(
+    let outcome = this.slotAdmission(
       slug,
       priority,
       dispatchCapacity(others, capacity, now).occupied,
-      dispatchCapacity(builds, capacity, now, undefined, {
+      dispatchCapacity(builds, capacity, now, {
         urgentClaims: this.urgentClaims(),
         startRequests: this.startClaims(),
       }),
     )
     if (outcome === 'admit') {
-      this.slotWaiters.delete(slug)
-      return 'admit'
+      const request = leafSlotRequest(self)
+      const admitted = await this.store.appendIfCurrent(slug, state.lastSeq, {
+        actor: DISPATCHER,
+        type: 'slot.admitted',
+        payload: request === undefined ? {} : { request },
+      })
+      if (admitted !== null) {
+        this.slotWaiters.delete(slug)
+        // Retain the admitted facts, so this tick's capacity counts the
+        // build as holding its slot from here on.
+        await this.store.servedBuildFacts(slug)
+        return 'admit'
+      }
+      // The state moved under the decision: decide again next tick.
+      outcome = 'wait'
     }
     this.slotWaiters.set(slug, priority)
     if (outcome === 'defer' && !this.deferredAdmissions.has(slug))
@@ -4387,7 +4406,7 @@ export class Dispatcher {
         (only === undefined || build.record.slug === only),
     )
     if (proposers.length === 0) return
-    const projection = dispatchCapacity(builds, this.deps.config.capacity, now, undefined, {
+    const projection = dispatchCapacity(builds, this.deps.config.capacity, now, {
       urgentClaims: this.urgentClaims(),
       startRequests: this.startClaims(),
     })
@@ -4782,31 +4801,33 @@ export class Dispatcher {
     await this.recordExhausted(record.slug)
   }
 
-  /** A node's admission into a free slot. A verification or measurement
-   * request (`reserving`) yields to urgent work ahead of it and defers while
-   * urgent claims are unevaluated. A node that already holds its slot — a
-   * restack-conflict reconcile, or runner work that kept its workspace across
-   * a failed launch or expired lease — only needs the node's own room:
-   * priority orders free slots, never one the node owns. */
+  /** A node's admission into a free slot, counting every other build that
+   * holds a slot. A verification or measurement request (`reserving`) yields
+   * to urgent work ahead of it and defers while urgent claims are
+   * unevaluated. A node that already holds its slot — a restack-conflict
+   * reconcile, or runner work that kept its workspace across a failed launch
+   * or expired lease — only needs the node's own room: priority orders free
+   * slots, never one the node owns. */
   private async nodeHasCapacity(
     slug: string,
     reserving = true,
   ): Promise<'admit' | 'wait' | 'defer'> {
     const builds = await this.capacityBuilds()
     const now = this.deps.clock()
-    const identity = migrationIdentity(
-      this.store.repositoryFacts().ticketMigrations,
-      this.deps.tickets.name,
+    const capacity = this.deps.config.capacity
+    const { occupied } = dispatchCapacity(
+      builds.filter((build) => build.record.slug !== slug),
+      capacity,
+      now,
     )
-    const { occupied } = nodeCapacity(builds, slug, now, identity)
     const node = builds.find((build) => build.record.slug === slug)
     if (!reserving || (node && occupiesCapacity(node, now)))
-      return occupied < this.deps.config.capacity ? 'admit' : 'wait'
+      return occupied < capacity ? 'admit' : 'wait'
     const outcome = this.slotAdmission(
       slug,
       node ? buildPriority(node.state) : 'normal',
       occupied,
-      dispatchCapacity(builds, this.deps.config.capacity, now, identity, {
+      dispatchCapacity(builds, capacity, now, {
         urgentClaims: this.urgentClaims(),
         startRequests: this.startClaims(),
       }),
@@ -8612,13 +8633,10 @@ export class Dispatcher {
       engaged,
     )
     // Pending start requests reserve ahead of the ordinary claims they outrank.
-    const projection = dispatchCapacity(
-      capacityBuilds,
-      config.capacity,
-      this.deps.clock(),
-      undefined,
-      { openPrs: { policy: config.policy, engaged }, startRequests: this.startClaims() },
-    )
+    const projection = dispatchCapacity(capacityBuilds, config.capacity, this.deps.clock(), {
+      openPrs: { policy: config.policy, engaged },
+      startRequests: this.startClaims(),
+    })
     const transition = backpressureTransition(
       backpressure,
       engaged,
