@@ -1,5 +1,11 @@
 import { describe, expect, test } from 'bun:test'
-import { drainStack, forEachBounded, orderedPrefetch } from './bounded-io'
+import {
+  drainStack,
+  forEachBounded,
+  orderedPrefetch,
+  settleInOrder,
+  withSpeculation,
+} from './bounded-io'
 
 type Deferred<T> = {
   promise: Promise<T>
@@ -151,5 +157,103 @@ describe('bounded io', () => {
     await expect(drainStack([], 0, work)).rejects.toBeInstanceOf(RangeError)
     await expect(forEachBounded([], Infinity, work)).rejects.toBeInstanceOf(RangeError)
     await expect(orderedPrefetch([], 1.5, work, () => {})).rejects.toBeInstanceOf(RangeError)
+  })
+})
+
+function track(promise: Promise<unknown>): { settled: boolean } {
+  const state = { settled: false }
+  promise.then(
+    () => (state.settled = true),
+    () => (state.settled = true),
+  )
+  return state
+}
+
+describe('stage joins', () => {
+  test('settleInOrder waits for every branch and reports the first failure in argument order', async () => {
+    const a = deferred<number>()
+    const b = deferred<string>()
+    const resolved = settleInOrder([a.promise, b.promise])
+    b.resolve('b')
+    await flush()
+    a.resolve(1)
+    expect(await resolved).toEqual([1, 'b'])
+
+    const first = deferred()
+    const second = deferred()
+    const pending = deferred()
+    const joined = settleInOrder([first.promise, second.promise, pending.promise])
+    const state = track(joined)
+    second.reject(new Error('second'))
+    await flush()
+    first.reject(new Error('first'))
+    await flush()
+    expect(state.settled).toBe(false)
+    pending.resolve()
+    await expect(joined).rejects.toThrow('first')
+  })
+
+  test('withSpeculation contains early failures and outlives nothing it started', async () => {
+    const unhandled: unknown[] = []
+    const spy = (reason: unknown) => unhandled.push(reason)
+    process.on('unhandledRejection', spy)
+    try {
+      // Speculation fails before the body needs it: discarded if never taken,
+      // rethrown where taken.
+      for (const takes of [false, true]) {
+        const digest = deferred()
+        const run = withSpeculation(
+          () => Promise.reject(new Error('packaging')),
+          async (take) => {
+            await digest.promise
+            if (takes) await take()
+            return 'body'
+          },
+        )
+        await flush()
+        digest.resolve()
+        if (takes) await expect(run).rejects.toThrow('packaging')
+        else expect(await run).toBe('body')
+      }
+
+      // Body ends untaken (a throw or a reuse return) while speculation runs:
+      // the signal aborts and the result waits for the speculation to settle.
+      for (const fails of [true, false]) {
+        const packaging = deferred<string>()
+        let signal!: AbortSignal
+        const run = withSpeculation(
+          (s) => {
+            signal = s
+            return packaging.promise
+          },
+          async () => {
+            if (fails) throw new Error('lookup')
+            return 'reuse'
+          },
+        )
+        const state = track(run)
+        await flush()
+        expect(signal.aborted).toBe(true)
+        expect(state.settled).toBe(false)
+        packaging.reject(new Error('aborted'))
+        if (fails) await expect(run).rejects.toThrow('lookup')
+        else expect(await run).toBe('reuse')
+      }
+
+      let fresh!: AbortSignal
+      const value = await withSpeculation(
+        async (s) => {
+          fresh = s
+          return 'archive'
+        },
+        async (take) => `fresh:${await take()}`,
+      )
+      expect(value).toBe('fresh:archive')
+      expect(fresh.aborted).toBe(false)
+      await flush()
+      expect(unhandled).toEqual([])
+    } finally {
+      process.off('unhandledRejection', spy)
+    }
   })
 })

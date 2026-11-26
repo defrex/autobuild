@@ -1,7 +1,8 @@
 /** Bounded concurrency for runtime tree IO. Every helper caps in-flight work at
  * an explicit finite limit, stops starting work after the first failure and
  * settles only once every started operation has settled, so callers can clean
- * up without racing outstanding writes. */
+ * up without racing outstanding writes. Stage-level helpers join whole
+ * concurrent branches under the same settle-before-report contract. */
 
 /** Filesystem operations in flight per traversal, and the prefetch window. */
 export const TREE_IO_CONCURRENCY = 16
@@ -123,5 +124,51 @@ export async function orderedPrefetch<T, R>(
   } catch (error) {
     await Promise.allSettled(pending)
     throw error
+  }
+}
+
+/** Awaits every task, then rejects with the first failure in argument order or
+ * resolves with every value in order. Concurrent branches therefore all settle
+ * before a caller cleans up, and report the error a serial run would have hit
+ * first. Build every task in the argument expression so none rejects unheard. */
+export async function settleInOrder<T extends readonly unknown[]>(
+  tasks: {
+    readonly [K in keyof T]: Promise<T[K]>
+  },
+): Promise<T> {
+  const outcomes = await Promise.allSettled(tasks as readonly Promise<unknown>[])
+  for (const outcome of outcomes) if (outcome.status === 'rejected') throw outcome.reason
+  return outcomes.map((outcome) => (outcome as PromiseFulfilledResult<unknown>).value) as never
+}
+
+/** Starts `start` speculatively and runs `body` alongside it. `take` awaits the
+ * speculative value, rethrowing its error at the point the body needs it. When
+ * the body ends without taking it, the signal aborts and its outcome, even a
+ * failure, is discarded. Either way this settles only after the speculative
+ * task has settled, so nothing it started outlives the caller. */
+export async function withSpeculation<T, R>(
+  start: (signal: AbortSignal) => Promise<T>,
+  body: (take: () => Promise<T>) => Promise<R>,
+): Promise<R> {
+  const controller = new AbortController()
+  let taken = false
+  // Contained at once, synchronous throws included, so a failure is never
+  // an unhandled rejection however early it lands.
+  const outcome: Promise<{ value: T } | { error: unknown }> = Promise.resolve()
+    .then(() => start(controller.signal))
+    .then(
+      (value) => ({ value }),
+      (error: unknown) => ({ error }),
+    )
+  try {
+    return await body(async () => {
+      taken = true
+      const settled = await outcome
+      if ('error' in settled) throw settled.error
+      return settled.value
+    })
+  } finally {
+    if (!taken) controller.abort()
+    await outcome
   }
 }

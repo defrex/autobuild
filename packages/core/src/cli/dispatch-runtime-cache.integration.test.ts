@@ -3,7 +3,17 @@ import { captureRuntimeIdentity } from '../runtime-identity'
 import { DispatchUpgradeController } from './dispatch-upgrade-controller'
 import { existsSync } from 'node:fs'
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtemp, mkdir, writeFile, readFile, rm, chmod, symlink, stat } from 'node:fs/promises'
+import {
+  mkdtemp,
+  mkdir,
+  writeFile,
+  readFile,
+  readdir,
+  rm,
+  chmod,
+  symlink,
+  stat,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, dirname } from 'node:path'
 import {
@@ -102,6 +112,54 @@ test('offline content identity, exact reuse, independent dependency bytes and im
   await file(join(first.root, 'tsconfig.json'), '{}')
   await expect(validateRuntime(first)).rejects.toThrow('compiler boundary')
   expect(await readFile(join(first.root, 'tsconfig.json'), 'utf8')).toBe('{}')
+}, 30000)
+test('a failed concurrent check publishes nothing and removes staging only after every branch settles', async () => {
+  // Staging directories and published runtimes; locks and layers aside.
+  const cacheEntries = async (checkout: string) =>
+    (await readdir(join(checkout, '.autobuild/runtime'))).filter(
+      (name) => name.startsWith('.preparing-') || name.includes('-guest1-'),
+    )
+
+  const broken = await fixture()
+  await file(join(broken.source, 'bin/ab.ts'), `throw new Error('broken import')`)
+  await expect(prepareRuntime(broken.source, broken.checkout)).rejects.toThrow(
+    'cached runtime import validation failed',
+  )
+  expect(await cacheEntries(broken.checkout)).toEqual([])
+
+  // The layer builds concurrently with the failing code stage and may remain:
+  // it is content-addressed and re-verified on every use, never a runtime.
+  const unsafe = await fixture()
+  const manifest = JSON.parse(await readFile(join(unsafe.source, 'package.json'), 'utf8'))
+  await file(
+    join(unsafe.source, 'package.json'),
+    JSON.stringify({ ...manifest, files: ['bin', '../outside'] }),
+  )
+  await expect(prepareRuntime(unsafe.source, unsafe.checkout)).rejects.toThrow(
+    'unsafe distribution path',
+  )
+  expect(await cacheEntries(unsafe.checkout)).toEqual([])
+
+  // A reuse lookup that throws while speculative packaging is in flight
+  // reports the lookup error and leaves no packaging scratch behind.
+  const { source, checkout } = await fixture()
+  const first = await prepareRuntime(source, checkout)
+  const metadata = join(dirname(first.root), 'runtime.json')
+  const valid = await readFile(metadata, 'utf8')
+  await writeFile(metadata, 'not json')
+  const scratch = await temp()
+  const previous = process.env.TMPDIR
+  process.env.TMPDIR = scratch
+  try {
+    await expect(prepareRuntime(source, checkout)).rejects.toThrow('incomplete runtime metadata')
+  } finally {
+    if (previous === undefined) delete process.env.TMPDIR
+    else process.env.TMPDIR = previous
+  }
+  expect(await readdir(scratch)).toEqual([])
+  expect(await cacheEntries(checkout)).toEqual([first.id])
+  await writeFile(metadata, valid)
+  expect((await prepareRuntime(source, checkout)).id).toBe(first.id)
 }, 30000)
 test('missing installed required dependency fails before publication; optional absence and nested versions survive', async () => {
   const { source, checkout } = await fixture()
