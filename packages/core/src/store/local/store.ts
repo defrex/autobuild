@@ -1913,14 +1913,16 @@ export class SqliteBuildStore implements BuildStore {
       resolveRegisteredValue,
       readResolvedReducerValue,
       loadValueRegistration,
+      loadedValueRegistration,
     } = reducedValues.value ?? (await reducedValues.load())
     // Reject invalid requests before touching storage. Only the requested
-    // reducer's registration initializes.
+    // reducer's registration initializes; a loaded one adds no await.
     const parsed = parseValueRequest(request)
+    const loaded = loadedValueRegistration(parsed.reducer)
     const resolved = resolveRegisteredValue(
       scope,
       parsed,
-      await loadValueRegistration(parsed.reducer),
+      loaded !== null ? loaded : await loadValueRegistration(parsed.reducer),
     )
     return readResolvedReducerValue(resolved, {
       highWater: async () => {

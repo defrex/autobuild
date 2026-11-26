@@ -8,7 +8,11 @@ import { reducerValueRequestSchema, resolveRegisteredValue } from '../store/redu
 import { takeoverJournal, yieldedNewcomerJournal } from '../testing/dispatch-journals'
 import { upgradeGenerationWrites } from '../testing/upgrade-generations'
 import { REDUCERS } from './reducer-registry'
-import { loadValueRegistration, SELECTIVE_VALUE_REGISTRATIONS } from './reducer-value-index'
+import {
+  loadedValueRegistration,
+  loadValueRegistration,
+  SELECTIVE_VALUE_REGISTRATIONS,
+} from './reducer-value-index'
 
 const scope = { kind: 'repo' as const, repo: '/repo' }
 const outcome = (run: () => unknown) => {
@@ -34,6 +38,8 @@ test.each(SELECTIVE_VALUE_REGISTRATIONS.map((name) => [name]))(
     const catalog = REDUCERS[name]!
     const selective = (await loadValueRegistration(name))!
     expect(selective).not.toBe(catalog)
+    // Once loaded, the same registration is available with no await.
+    expect(loadedValueRegistration(name)).toBe(selective)
     const [entry, expected] = [selective.valueRead, catalog.valueRead]
     if ('excluded' in entry || 'excluded' in expected) throw new Error(`${name} is excluded`)
     expect(selective.reducer.identity).toBe(catalog.reducer.identity)
@@ -70,6 +76,8 @@ test.each(SELECTIVE_VALUE_REGISTRATIONS.map((name) => [name]))(
 test('other names resolve through the catalog with its errors', async () => {
   expect(await loadValueRegistration('build')).toBe(REDUCERS.build!)
   expect(await loadValueRegistration('noSuchReducer')).toBeUndefined()
+  expect(loadedValueRegistration('build')).toBe(REDUCERS.build!)
+  expect(loadedValueRegistration('noSuchReducer')).toBeUndefined()
   for (const reducer of ['noSuchReducer', 'journalView', 'build']) {
     const request = reducerValueRequestSchema.parse({ reducer })
     const loaded = await loadValueRegistration(reducer)

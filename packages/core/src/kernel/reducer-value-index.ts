@@ -39,20 +39,37 @@ function registration(
 }
 
 const loaded = new Map<string, Promise<RegisteredReducer>>()
+const settled = new Map<string, RegisteredReducer>()
+let catalog: Record<string, RegisteredReducer> | undefined
 
 /** The registration `name` resolves to, or `undefined` for an unknown name. */
 export async function loadValueRegistration(name: string): Promise<RegisteredReducer | undefined> {
   if (!Object.hasOwn(SELECTIVE, name)) {
-    const { REDUCERS } = await import('./reducer-registry')
-    return Object.hasOwn(REDUCERS, name) ? REDUCERS[name] : undefined
+    catalog ??= (await import('./reducer-registry')).REDUCERS
+    return Object.hasOwn(catalog, name) ? catalog[name] : undefined
   }
   let pending = loaded.get(name)
   if (!pending) {
-    pending = SELECTIVE[name]!().catch((error: unknown) => {
-      loaded.delete(name)
-      throw error
-    })
+    pending = SELECTIVE[name]!().then(
+      (registration) => {
+        settled.set(name, registration)
+        return registration
+      },
+      (error: unknown) => {
+        loaded.delete(name)
+        throw error
+      },
+    )
     loaded.set(name, pending)
   }
   return pending
+}
+
+/** The answer `loadValueRegistration(name)` would give, synchronously, once
+ * the module it needs has loaded; `null` while it has not. A warm read then
+ * resolves with no added await, so its timing matches the static catalog. */
+export function loadedValueRegistration(name: string): RegisteredReducer | undefined | null {
+  if (Object.hasOwn(SELECTIVE, name)) return settled.get(name) ?? null
+  if (!catalog) return null
+  return Object.hasOwn(catalog, name) ? catalog[name] : undefined
 }

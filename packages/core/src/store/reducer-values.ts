@@ -40,10 +40,18 @@ export function resolveReducerValue(
   return resolveRegisteredValue(scope, request, registration, catalogIdentity)
 }
 
-export async function readReducerValue(
+export function readReducerValue(
   scope: SnapshotScope,
   request: ReducerValueRequest,
   storage: ReducerValueStorage,
 ): Promise<ReducerValue> {
-  return readResolvedReducerValue(resolveReducerValue(scope, request), storage)
+  // Not `async`: returning the inner promise directly keeps the read's
+  // microtask timing identical to the single-function body it replaced.
+  let resolved: ReturnType<typeof resolveReducerValue>
+  try {
+    resolved = resolveReducerValue(scope, request)
+  } catch (error) {
+    return Promise.reject(error)
+  }
+  return readResolvedReducerValue(resolved, storage)
 }

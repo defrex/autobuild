@@ -69,6 +69,7 @@ export const reducedValues = new Capability(async () => {
     resolveRegisteredValue: read.resolveRegisteredValue,
     readResolvedReducerValue: read.readResolvedReducerValue,
     loadValueRegistration: index.loadValueRegistration,
+    loadedValueRegistration: index.loadedValueRegistration,
   }
 })
 
