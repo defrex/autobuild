@@ -8213,8 +8213,9 @@ export async function openBuildListingReadBudget() {
   const { MemoryBuildStore } = await import('../store/memory')
   const { listOperatorLandings } = await import('../operator/landings')
   const { getOperatorAttention } = await import('../operator/attention')
-  const { readRepositoryCapacity } = await import('../cli/repository-status')
-  const repo = 'open-listing-budget'
+  const { readRepositoryCapacity, abRepositoryStatus } = await import('../cli/repository-status')
+  const { abBuilds, abBuildStatus } = await import('../cli/status')
+  const repo = '/open-listing-budget'
   const now = new Date(1000)
   const created = (slug: string) => ({
     actor: DISPATCHER,
@@ -8310,6 +8311,49 @@ export async function openBuildListingReadBudget() {
     history: (store: BuildStore) => listOperatorBuilds({ store, repo, scope: 'all', now }),
   }
   type Vector = { records: number; digests: number; calls: Record<string, number> }
+  // The CLI status commands over the same store: each prints its JSON once.
+  const exec = async (args: string[]) =>
+    args[1] === 'remote'
+      ? { stdout: '', stderr: 'no origin', exitCode: 2 }
+      : { stdout: `${repo}/.git\n${repo}/.git\n${repo}\n`, stderr: '', exitCode: 0 }
+  const cli = async (
+    store: BuildStore,
+    command: (opts: {
+      targetRepo: string
+      env: Record<string, string>
+      exec: typeof exec
+      openStore: () => BuildStore
+      now: () => Date
+      json: true
+      stdout: (line: string) => void
+    }) => Promise<void>,
+  ) => {
+    const lines: string[] = []
+    // A handle whose close leaves the shared memory store open.
+    const handle = new Proxy(store, {
+      get(target, property) {
+        if (property === 'close') return async () => {}
+        const value = Reflect.get(target, property)
+        return typeof value === 'function' ? value.bind(target) : value
+      },
+    })
+    await command({
+      targetRepo: repo,
+      env: {},
+      exec,
+      openStore: () => handle,
+      now: () => now,
+      json: true,
+      stdout: (line) => lines.push(line),
+    })
+    return JSON.parse(lines.join('\n'))
+  }
+  const commands = {
+    builds: (store: BuildStore) => cli(store, abBuilds),
+    buildStatus: (store: BuildStore) =>
+      cli(store, (opts) => abBuildStatus({ ...opts, slug: 'open-consent' })),
+    repositoryStatus: (store: BuildStore) => cli(store, abRepositoryStatus),
+  }
   let baseline: Record<string, Vector> | undefined
   const history = new Map<number, number>()
   for (const settled of [1, 30])
@@ -8324,8 +8368,28 @@ export async function openBuildListingReadBudget() {
       const all = { ...surfaces, capacity, attentionAtHead }
       // Warm-up: every once-per-key reduction happens here. The seeded
       // surfaces answer real work, so the counted reads are meaningful.
-      for (const run of Object.values(all)) await run(store)
+      for (const run of [...Object.values(all), ...Object.values(commands)]) await run(store)
       expect((await surfaces.landings(store)).map((entry) => entry.slug)).toEqual(['open-consent'])
+      // Every answer reports slot state (#1341) from the facts it already read.
+      const held = { state: 'held' }
+      const none = { state: 'none' }
+      // The consent leaf has not recorded `pipeline.settled`: it still holds.
+      const slots = { 'open-queued': held, 'open-consent': held, 'open-aborted': none }
+      for (const scope of ['active', 'queued'] as const)
+        for (const row of await surfaces[scope](store))
+          expect({ slug: row.slug, slot: row.slot }).toEqual({
+            slug: row.slug,
+            slot: slots[row.slug as keyof typeof slots],
+          })
+      const dashboardRows = (await surfaces.dashboard(store)).model.builds
+      expect(Object.fromEntries(dashboardRows.map((row) => [row.slug, row.slot]))).toEqual(slots)
+      // Repository status projects capacity as the dispatcher does, without
+      // the aborted build in cleanup.
+      const { 'open-aborted': _aborted, ...admitted } = slots
+      expect((await surfaces.status(store)).capacity?.slots).toEqual(admitted)
+      expect((await capacity(store))?.slots).toEqual(admitted)
+      const got = await surfaces.get(store)
+      expect([got.detail.slot, got.dashboardRow?.slot]).toEqual([held, held])
       expect(
         (await surfaces.dashboard(store)).model.builds.map((build) => build.slug).sort(),
       ).toEqual(['open-aborted', 'open-consent', 'open-queued'])
@@ -8358,6 +8422,30 @@ export async function openBuildListingReadBudget() {
           })
           if (name === 'history') history.set(settled, entries.vector.records)
           else vectors[name] = { ...entries.vector, calls: calls.vector() }
+        }
+        // The CLI listing iterates every record (pre-existing), so it stays
+        // out of the flat vectors; it still reads no event row.
+        for (const [name, run] of Object.entries(commands)) {
+          rows.reset()
+          const output = await run(store)
+          expect({ name, rows: rows.rows, buildRows: rows.buildRows }).toEqual({
+            name,
+            rows: 0,
+            buildRows: 0,
+          })
+          const reported =
+            name === 'builds'
+              ? Object.fromEntries(
+                  (output as { slug: string; slot?: unknown }[]).map((row) => [row.slug, row.slot]),
+                )
+              : name === 'buildStatus'
+                ? { 'open-consent': output.slot }
+                : output.capacity.slots
+          expect({ name, reported }).toEqual({
+            name,
+            // `ab builds` lists the active scope: the queued build is under --queued.
+            reported: name === 'repositoryStatus' ? admitted : { 'open-consent': held },
+          })
         }
       } finally {
         calls.restore()
