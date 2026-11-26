@@ -12,6 +12,13 @@ import {
   symlink,
 } from 'node:fs/promises'
 import { dirname, join, relative, resolve, isAbsolute } from 'node:path'
+import {
+  PACKAGE_CONCURRENCY,
+  TREE_IO_CONCURRENCY,
+  drainStack,
+  forEachBounded,
+  orderedPrefetch,
+} from './bounded-io'
 
 export type Manifest = {
   name?: string
@@ -49,6 +56,23 @@ export async function installedPackage(name: string, start: string): Promise<str
   }
 }
 
+/** Applies recorded directory modes deepest level first, so a read-only
+ * directory is restricted only after every descendant has been written. */
+async function applyDirectoryModes(
+  directories: Array<{ target: string; mode: number; depth: number }>,
+): Promise<void> {
+  const levels = new Map<number, Array<{ target: string; mode: number }>>()
+  for (const directory of directories) {
+    const level = levels.get(directory.depth)
+    if (level) level.push(directory)
+    else levels.set(directory.depth, [directory])
+  }
+  for (const depth of [...levels.keys()].sort((a, b) => b - a))
+    await forEachBounded(levels.get(depth)!, TREE_IO_CONCURRENCY, ({ target, mode }) =>
+      chmod(target, mode),
+    )
+}
+
 /** Independent bytes, never hardlinks. Package-internal links are normalized;
  * an escaping asset link is rejected rather than silently following a checkout. */
 export async function copySnapshotTree(
@@ -58,45 +82,105 @@ export async function copySnapshotTree(
   stack = new Set<string>(),
   exclusions = excludedSnapshotNames,
 ): Promise<void> {
-  const actual = await realpath(source)
-  if (!inside(boundary, actual))
-    throw new Error(`snapshot link escapes package: ${source} -> ${actual}`)
-  if (stack.has(actual)) throw new Error(`cyclic snapshot asset link: ${source}`)
-  const sourceStat = await lstat(source)
-  if (sourceStat.isSymbolicLink()) {
-    const mapped = resolve(target, relative(source, actual))
-    await mkdir(dirname(target), { recursive: true })
-    await symlink(relative(dirname(target), mapped), target)
-    return
-  }
-  const stat = await lstat(actual)
-  if (stat.isDirectory()) {
-    await mkdir(target, { recursive: true })
-    const next = new Set(stack).add(actual)
-    for (const name of (await readdir(actual)).sort()) {
-      if (exclusions.has(name) || (exclusions.has('.env') && name.startsWith('.env.'))) continue
-      await copySnapshotTree(join(actual, name), join(target, name), boundary, next, exclusions)
-    }
-    await chmod(target, stat.mode & 0o777)
-  } else if (stat.isFile()) {
-    await mkdir(dirname(target), { recursive: true })
-    await copyFile(actual, target)
-    await chmod(target, stat.mode & 0o777)
-  } else throw new Error(`unsupported snapshot asset: ${source}`)
+  type Item = { source: string; target: string; stack: Set<string>; depth: number }
+  const directories: Array<{ target: string; mode: number; depth: number }> = []
+  await drainStack<Item>(
+    [{ source, target, stack, depth: 0 }],
+    TREE_IO_CONCURRENCY,
+    async (item, push) => {
+      const actual = await realpath(item.source)
+      if (!inside(boundary, actual))
+        throw new Error(`snapshot link escapes package: ${item.source} -> ${actual}`)
+      if (item.stack.has(actual)) throw new Error(`cyclic snapshot asset link: ${item.source}`)
+      // A child's parent directory was created before the child was queued.
+      const root = item.depth === 0
+      const sourceStat = await lstat(item.source)
+      if (sourceStat.isSymbolicLink()) {
+        const mapped = resolve(item.target, relative(item.source, actual))
+        if (root) await mkdir(dirname(item.target), { recursive: true })
+        await symlink(relative(dirname(item.target), mapped), item.target)
+        return
+      }
+      const stat = await lstat(actual)
+      if (stat.isDirectory()) {
+        await mkdir(item.target, { recursive: true })
+        directories.push({ target: item.target, mode: stat.mode & 0o777, depth: item.depth })
+        const next = new Set(item.stack).add(actual)
+        const names = (await readdir(actual))
+          .sort()
+          .filter(
+            (name) =>
+              !exclusions.has(name) && !(exclusions.has('.env') && name.startsWith('.env.')),
+          )
+        for (let index = names.length - 1; index >= 0; index--)
+          push({
+            source: join(actual, names[index]!),
+            target: join(item.target, names[index]!),
+            stack: next,
+            depth: item.depth + 1,
+          })
+      } else if (stat.isFile()) {
+        if (root) await mkdir(dirname(item.target), { recursive: true })
+        await copyFile(actual, item.target)
+        await chmod(item.target, stat.mode & 0o777)
+      } else throw new Error(`unsupported snapshot asset: ${item.source}`)
+    },
+  )
+  await applyDirectoryModes(directories)
 }
 
-/** Digest includes names, executable bits, bytes and internal link topology. */
+/** Copies an already validated runtime tree: link strings verbatim, file bytes
+ * and permission bits. Every result is digested or import-checked by callers. */
+export async function copyTreeVerbatim(source: string, target: string): Promise<void> {
+  type Item = { source: string; target: string; depth: number }
+  const directories: Array<{ target: string; mode: number; depth: number }> = []
+  await drainStack<Item>(
+    [{ source, target, depth: 0 }],
+    TREE_IO_CONCURRENCY,
+    async (item, push) => {
+      const stat = await lstat(item.source)
+      if (stat.isSymbolicLink()) await symlink(await readlink(item.source), item.target)
+      else if (stat.isDirectory()) {
+        await mkdir(item.target, { recursive: item.depth === 0 })
+        directories.push({ target: item.target, mode: stat.mode & 0o777, depth: item.depth })
+        for (const name of await readdir(item.source))
+          push({
+            source: join(item.source, name),
+            target: join(item.target, name),
+            depth: item.depth + 1,
+          })
+      } else if (stat.isFile()) {
+        await copyFile(item.source, item.target)
+        await chmod(item.target, stat.mode & 0o777)
+      } else throw new Error(`unsupported runtime tree entry: ${item.source}`)
+    },
+  )
+  await applyDirectoryModes(directories)
+}
+
+/** Digest includes names, executable bits, bytes and internal link topology.
+ * Metadata is gathered concurrently, then hashed in sorted pre-order with file
+ * bytes read through a bounded in-order window, so the digest is independent
+ * of completion order. */
 export async function treeDigest(
   root: string,
   exclude = new Set<string>(),
   allowedLink?: string,
 ): Promise<string> {
-  const hash = createHash('sha256')
-  async function walk(path: string): Promise<void> {
-    const rel = relative(root, path)
+  type Node = {
+    path: string
+    mode: number
+    kind: 'link' | 'directory' | 'file'
+    link?: string
+    children?: Node[]
+  }
+  const top: Node = { path: root, mode: 0, kind: 'file' }
+  await drainStack([top], TREE_IO_CONCURRENCY, async (node, push) => {
+    const path = node.path
     const stat = await lstat(path)
-    hash.update(JSON.stringify([rel, stat.mode & 0o111]))
+    node.mode = stat.mode
     if (stat.isSymbolicLink()) {
+      node.kind = 'link'
       const link = await readlink(path)
       if (
         !inside(root, resolve(dirname(path), link)) &&
@@ -106,17 +190,49 @@ export async function treeDigest(
       const actual = await realpath(path)
       if (!inside(root, actual) && actual !== allowedLink)
         throw new Error(`snapshot link escapes runtime: ${path}`)
-      hash.update(`link:${relative(dirname(path), actual)}`)
+      node.link = relative(dirname(path), actual)
     } else if (stat.isDirectory()) {
-      hash.update('directory')
-      for (const name of (await readdir(path)).sort())
-        if (!exclude.has(name)) await walk(join(path, name))
-    } else if (stat.isFile()) {
-      hash.update('file')
-      hash.update(await readFile(path))
-    } else throw new Error(`unsupported snapshot file: ${path}`)
+      node.kind = 'directory'
+      const children = (await readdir(path))
+        .sort()
+        .filter((name) => !exclude.has(name))
+        .map((name): Node => ({ path: join(path, name), mode: 0, kind: 'file' }))
+      node.children = children
+      for (let index = children.length - 1; index >= 0; index--) push(children[index]!)
+    } else if (stat.isFile()) node.kind = 'file'
+    else throw new Error(`unsupported snapshot file: ${path}`)
+  })
+  const order: Node[] = []
+  const pending = [top]
+  while (pending.length) {
+    const node = pending.pop()!
+    order.push(node)
+    const children = node.children ?? []
+    for (let index = children.length - 1; index >= 0; index--) pending.push(children[index]!)
   }
-  await walk(root)
+  const hash = createHash('sha256')
+  let emitted = 0
+  const emitThrough = (end: number) => {
+    for (; emitted < end; emitted++) {
+      const node = order[emitted]!
+      hash.update(JSON.stringify([relative(root, node.path), node.mode & 0o111]))
+      if (node.kind === 'link') hash.update(`link:${node.link}`)
+      else if (node.kind === 'directory') hash.update('directory')
+    }
+  }
+  const files: number[] = []
+  for (const [index, node] of order.entries()) if (node.kind === 'file') files.push(index)
+  await orderedPrefetch(
+    files,
+    TREE_IO_CONCURRENCY,
+    (index) => readFile(order[index]!.path),
+    (bytes, index) => {
+      emitThrough(index + 1)
+      hash.update('file')
+      hash.update(bytes)
+    },
+  )
+  emitThrough(order.length)
   return hash.digest('hex')
 }
 
@@ -148,9 +264,17 @@ export async function scanDependencies(
       ...manifest.dependencies,
       ...manifest.optionalDependencies,
     }
-    for (const name of Object.keys(names).sort()) {
-      if (name === '@defrex/autobuild' && options.coreRoot) continue
-      const found = await installedPackage(name, source)
+    const sorted = Object.keys(names)
+      .sort()
+      .filter((name) => !(name === '@defrex/autobuild' && options.coreRoot))
+    // Resolution is independent per edge; ids are still assigned in sorted
+    // depth-first order below, which the fingerprint encodes.
+    const resolved: Array<string | undefined> = []
+    await forEachBounded(sorted, TREE_IO_CONCURRENCY, async (name, index) => {
+      resolved[index] = await installedPackage(name, source)
+    })
+    for (const [index, name] of sorted.entries()) {
+      const found = resolved[index]
       if (!found) {
         if (
           Object.hasOwn(manifest.optionalDependencies ?? {}, name) ||
@@ -172,7 +296,7 @@ export async function scanDependencies(
           source: found,
           manifest: await readManifest(found),
           edges: {},
-          digest: await treeDigest(found, dependencyExclusions),
+          digest: '',
         }
         packages.push(entry)
         entry.edges = await edges(found, entry.manifest)
@@ -182,6 +306,9 @@ export async function scanDependencies(
     return result
   }
   const roots = await edges(root, options.manifest ?? (await readManifest(root)), options.dev)
+  await forEachBounded(packages, PACKAGE_CONCURRENCY, async (entry) => {
+    entry.digest = await treeDigest(entry.source, dependencyExclusions)
+  })
   const fingerprint = createHash('sha256')
     .update(JSON.stringify({ roots, packages: packages.map(({ source: _, ...rest }) => rest) }))
     .digest('hex')
@@ -206,7 +333,7 @@ export async function copyDependencies(
       await symlink(relative(dirname(link), coreRoot), link)
     }
   }
-  for (const [id, entry] of graph.packages.entries()) {
+  await forEachBounded(graph.packages, PACKAGE_CONCURRENCY, async (entry, id) => {
     await copySnapshotTree(
       entry.source,
       packagePath(id),
@@ -216,7 +343,8 @@ export async function copyDependencies(
     )
     if ((await treeDigest(packagePath(id), dependencyExclusions)) !== entry.digest)
       throw new Error(`installed dependency changed while copying: ${entry.source}; retry dispatch`)
-  }
+  })
+  // Links are published only after every package copy has been verified.
   for (const [id, entry] of graph.packages.entries()) await links(packagePath(id), entry.edges)
   await links(target, graph.roots)
 }
