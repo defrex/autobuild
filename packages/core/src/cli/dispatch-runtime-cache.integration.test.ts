@@ -140,8 +140,9 @@ test('a failed concurrent check publishes nothing and removes staging only after
   )
   expect(await cacheEntries(unsafe.checkout)).toEqual([])
 
-  // A reuse lookup that throws while speculative packaging is in flight
-  // reports the lookup error and leaves no packaging scratch behind.
+  // A reuse lookup that throws while speculative packaging and the archive
+  // round trip are in flight reports the lookup error and leaves no
+  // packaging scratch behind.
   const { source, checkout } = await fixture()
   const first = await prepareRuntime(source, checkout)
   const metadata = join(dirname(first.root), 'runtime.json')
