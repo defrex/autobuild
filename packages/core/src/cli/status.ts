@@ -1382,6 +1382,9 @@ export async function abBuilds(opts: AbBuildsOpts): Promise<void> {
             state: facts.state,
             workspace: facts.workspace !== null,
             provisioning: facts.provisionMarker !== undefined,
+            ...(facts.provisionMarker !== undefined
+              ? { provisioningSeq: facts.provisionMarker.seq }
+              : {}),
             restackDue: landingRestackDue(facts.state, facts.log),
           },
           now,

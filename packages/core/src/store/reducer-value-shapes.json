@@ -13278,6 +13278,10 @@
           "type": "81",
           "optional": true
         },
+        "slotAdmittedNeed": {
+          "type": "4",
+          "optional": true
+        },
         "finalizeSteps": {
           "type": "1221",
           "optional": false
@@ -25567,6 +25571,10 @@
         "request": {
           "type": "1787",
           "optional": true
+        },
+        "need": {
+          "type": "4",
+          "optional": true
         }
       }
     },
@@ -33302,6 +33310,10 @@
         },
         "slotReleasedSeq": {
           "type": "81",
+          "optional": true
+        },
+        "slotAdmittedNeed": {
+          "type": "4",
           "optional": true
         },
         "finalizeSteps": {

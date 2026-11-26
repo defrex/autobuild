@@ -389,6 +389,30 @@ export function nodeMeasurementDue(state: BuildState): boolean {
   return baselineMeasurementDue(state) || progressMeasurementDue(state) !== undefined
 }
 
+/** The key of the node measurement owed now, starting or progress, for slot
+ * accounting (SPEC §12 "What holds a slot"): `measure:baseline:<revision>:<pin>`
+ * or `measure:progress:<head>`. Unlike `nodeMeasurementDue` it is not gated
+ * on a pause or pending commands, so an admitted measurement keeps its slot
+ * until its runner acknowledges a requested pause or abort. Read from
+ * reduced state alone. */
+export function nodeMeasurementNeed(state: BuildState): string | undefined {
+  const optimization = state.optimization
+  if (
+    state.kind !== 'node' ||
+    state.nodeOpened === undefined ||
+    optimization === undefined ||
+    terminal(state)
+  )
+    return undefined
+  if (optimization.starting === undefined)
+    return optimization.stopped === undefined
+      ? `measure:baseline:${optimization.revision}:${optimization.accepted.harnessPin}`
+      : undefined
+  const head = optimization.progressQueue?.[0]
+  if (optimization.objective.metric.kind !== 'panel' || head === undefined) return undefined
+  return `measure:progress:${head}`
+}
+
 /** The deterministic id of the escalation a failed node panel raises. */
 export function nodePanelEscalationId(panelId: string): string {
   return `node-panel-failed-${panelId}`
