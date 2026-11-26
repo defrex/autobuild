@@ -4726,9 +4726,9 @@ action. Check the gates in this order:
    same source. This includes harvest proposals filed directly into the ready
    state. Plain dispatch output reports unresolved ids and cycles.
 6. **Capacity:** a build holds a slot from admission while Autobuild owes its
-   next move, runner or not. Paused builds, builds blocked on a question, builds
-   waiting for a merge decision or merge gates, and builds waiting on other
-   tickets hold none. An answered or resumed build, one whose ticket wait ended,
+   next move, runner or not. Paused builds, builds blocked on a question once
+   nothing is still working on them, builds waiting for a merge decision or
+   merge gates, and builds waiting on other tickets hold none. An answered or resumed build, one whose ticket wait ended,
    and one that must re-verify or reconcile reserve a slot ahead of normal
    claims until admitted; urgent work goes first (see
    [slot admission order](dispatcher.md#slot-admission-order)). Inspect `ab repository status`, `ab builds --queued` and
