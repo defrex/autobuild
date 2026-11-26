@@ -406,7 +406,8 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
         })
         // Its own process group, so a cancel stops setup and its children
         // together and releases the pipes awaited below (mirrors the real
-        // provider).
+        // provider). A cancel also waits for the group to be gone, so close
+        // returns only once no setup process remains.
         const proc = Bun.spawn(['sh', '-c', this.sandboxSetupCommand], {
           cwd: identity.workspacePath,
           stdin: 'ignore',
@@ -415,7 +416,10 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           env: this.sandboxEnv(),
           detached: true,
         })
-        const onAbort = (): void => void terminateProcessGroup(proc.pid)
+        let terminating: Promise<boolean> | undefined
+        const onAbort = (): void => {
+          terminating ??= terminateProcessGroup(proc.pid)
+        }
         if (signal?.aborted) onAbort()
         else signal?.addEventListener('abort', onAbort, { once: true })
         const [stdout, stderr, exitCode] = await Promise.all([
@@ -423,7 +427,15 @@ export class FakeWorkspaceProvider implements WorkspaceProvider {
           new Response(proc.stderr).text(),
           proc.exited,
         ]).finally(() => signal?.removeEventListener('abort', onAbort))
-        if (signal?.aborted) throw new SandboxCancelledError()
+        if (signal?.aborted) {
+          // The pipes close when the last member exits, before it is reaped;
+          // a killed-but-unreaped member (a zombie re-parented to init) still
+          // answers kill(pid, 0). Wait for the whole group to be reaped so
+          // close returns only once no setup process remains. A `false`
+          // result (a member stuck past SIGKILL) still settles as cancelled.
+          await terminating
+          throw new SandboxCancelledError()
+        }
         if (exitCode !== 0) {
           throw new SandboxOperationError(
             'provision',

@@ -221,6 +221,8 @@ describe('FakeWorkspaceProvider operator sandbox (AUT-343 fake parity)', () => {
     })
     expect(Date.now() - started).toBeLessThan(5_000)
     expect(closed.attempt).toEqual({ state: 'absent', cancelled: true })
+    // Close resolves only after the setup group is reaped; an unreaped zombie
+    // would still answer kill(pid, 0).
     expect(() => process.kill(setupChild, 0)).toThrow()
     expect(await opened.settled!).toEqual({ state: 'absent', cancelled: true })
     expect(await Bun.file(join(identity.workspacePath, 'README.md')).exists()).toBe(false)
