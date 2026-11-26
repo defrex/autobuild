@@ -295,8 +295,9 @@ spread. A command node uses the objective's pairing and sample count (see
 [judge panel](#judge-panels) of its harness pin against itself: its starting
 value is 0.5, and its spread is the distance of that self-comparison win rate
 from 0.5. The dispatcher admits that run as it admits a node verification: the
-node takes a runner slot, gets a workspace for the run, and releases it once
-the starting value is recorded.
+node holds a runner slot from admission until the starting value is recorded,
+through any relaunch of its runner. The workspace for the run is provisioned
+after admission and released separately; it never holds the slot.
 
 **Noise check.** When ε, in metric units, is smaller than the measured spread,
 the gate would accept noise. A panel's ε is a win-rate margin, compared with

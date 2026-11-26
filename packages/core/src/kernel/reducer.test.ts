@@ -1551,6 +1551,17 @@ describe('reduceBuild: finalize projections', () => {
     expect(at(18)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 18 })
   })
 
+  test('a node admission names its need; one without a need clears it (SPEC §12)', () => {
+    const log = toLog([
+      ...prelude(),
+      ev('slot.admitted', { request: 'verification', need: 'integration:c:4' }),
+      ev('slot.admitted', { request: 'resume' }),
+    ])
+    expect(reduceBuild(log.slice(0, 1))).not.toHaveProperty('slotAdmittedNeed')
+    expect(reduceBuild(log.slice(0, -1)).slotAdmittedNeed).toBe('integration:c:4')
+    expect(reduceBuild(log)).not.toHaveProperty('slotAdmittedNeed')
+  })
+
   test('prState is UNCHANGED by the addition — it stays the full-log PR fact', () => {
     // f_03d0f6d4's constraint: the janitor (dispatcher.ts:342,:367,:396) and
     // the restart-orthogonal epilogue (engine.ts:402) read prState, so the fix
