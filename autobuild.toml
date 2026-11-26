@@ -129,6 +129,7 @@ paths = [
   "tools/harvest-suspension-capture.ts",
   "tools/native-session-capture.ts",
   "tools/judge-session-capture.ts",
+  "tools/status-vocabulary-capture.ts",
 ]
 
 # Visual evidence for the operator web app in the hosted store service

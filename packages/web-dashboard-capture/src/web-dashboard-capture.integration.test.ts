@@ -1,5 +1,7 @@
 import { expect, test } from 'bun:test'
 import {
+  BUILD_STATUS_TONE,
+  HARVEST_STATUS_TONE,
   landingPolicyDisplay,
   type DashboardBuild,
   type DashboardModel,
@@ -51,7 +53,7 @@ function models(): WebFixtureModels {
   }
   const happy: DashboardModel = {
     ...base,
-    active: { current: 2, limit: 6 },
+    active: { current: 4, limit: 6 },
     drained: false,
     repositoryPaused: false,
     harvestPaused: false,
@@ -63,6 +65,8 @@ function models(): WebFixtureModels {
         pr: { url: 'https://forge.example/pr/1', state: 'merged' },
       }),
       build({ slug: 'dashboard-key-legend', ticketId: 'AUT-129', steps: HAPPY_STEPS }),
+      build({ slug: 'harvest-dedup-window', ticketId: 'AUT-136', steps: HAPPY_STEPS }),
+      build({ slug: 'parallel-verify-steps', ticketId: 'AUT-133', steps: HAPPY_STEPS }),
     ],
     harvest: {
       kind: 'harvest',
@@ -142,6 +146,15 @@ function models(): WebFixtureModels {
     },
     capacity: {
       ...happy,
+      builds: [
+        ...happy.builds,
+        build({
+          slug: 'integration-aborted',
+          status: 'cleaning',
+          slot: { state: 'none' },
+          abortProgress: 'running work stopped; abort cleanup pending or in progress',
+        }),
+      ],
       active: { current: 4, limit: 4 },
       capacity: {
         configured: 4,
@@ -272,6 +285,19 @@ test('every web frame renders its required evidence and none of the forbidden', 
       }
     }
   }
+})
+
+test('the web frames render every shared status word between them (SPEC §14)', async () => {
+  const fixtures = models()
+  const seen = new Set<string>()
+  for (const spec of WEB_FRAME_SPECS) {
+    const text = evidenceText(await renderWebFrame(spec, fixtures, { css: '', fontCss: '' }))
+    for (const word of [...Object.keys(BUILD_STATUS_TONE), ...Object.keys(HARVEST_STATUS_TONE)])
+      if (new RegExp(`\\b${word}\\b`).test(text)) seen.add(word)
+  }
+  expect([...seen].sort()).toEqual(
+    [...new Set([...Object.keys(BUILD_STATUS_TONE), ...Object.keys(HARVEST_STATUS_TONE)])].sort(),
+  )
 })
 
 test('the capacity notice shows active open-PR backpressure alone and hides it when inactive', async () => {

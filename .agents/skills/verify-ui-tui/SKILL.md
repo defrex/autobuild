@@ -72,7 +72,11 @@ the diff and not to decide applicability again.
    the verification-fixture observations: each image opened and non-empty; rows/status/progress/separators do not overlap;
    the Harvest row is legible; both mixed frames persistently show
    `repository PAUSED` and the `CAP-QUEUED` row as yellow `(held)` while keeping
-   its literal `QUEUED` status; the narrow frame truncates/wraps those additions
+   its green `STARTING` status; every green status word sits on a build that
+   holds a slot and the `active` counter equals the green rows, with
+   `status-vocabulary-wide` showing `ABORTING`, `MERGING` and
+   `(merge decision) WAITING` and the `harvest-escalated-wide` and
+   `harvest-failed-wide` frames a red Harvest word; the narrow frame truncates/wraps those additions
    deliberately without clipping; colour emphasis is present while literal
    status remains readable; Unicode samples (accented text, curly punctuation,
    em dash, CJK, variation-selector emoji, flag, and ZWJ family) are readable,

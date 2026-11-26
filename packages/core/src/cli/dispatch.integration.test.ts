@@ -5344,7 +5344,7 @@ describe('abDispatch --once with an interactive terminal', () => {
       expect(firstFrame).not.toMatch(/\bdrift\b/i)
       expect(firstFrame).toContain('harvest OFF')
       expect(firstFrame).toContain('pressure-source')
-      expect(firstFrame).toContain('QUEUED')
+      expect(firstFrame).toContain('STARTING')
       expect(firstFrame).toContain('dispatch initialization pending')
 
       const run = 'h_pressure_claimed'
@@ -6907,8 +6907,10 @@ describe('abDispatch interactive keyboard controls', () => {
       input.press('down')
       await waitFor(() => /^ > .*beta-work/m.test(stripAnsi(term.all())))
       input.press('pause')
-      await waitFor(() => /beta-work.*PAUSING/.test(latestDashboardFrame(term)))
-      expect(latestDashboardFrame(term)).toContain('p cancel pause')
+      // A merge-waiting build holds no slot, so it keeps its word until the
+      // pause is acknowledged; only the control changes (SPEC §14).
+      await waitFor(() => latestDashboardFrame(term).includes('p cancel pause'))
+      expect(latestDashboardFrame(term)).toMatch(/beta-work.*\(merge decision\) WAITING/)
       input.press('pause')
       input.press('hold')
       input.press('hold')
@@ -6925,7 +6927,7 @@ describe('abDispatch interactive keyboard controls', () => {
           ).length === 4
         )
       })
-      await waitFor(() => /beta-work.*RUNNING/.test(latestDashboardFrame(term)))
+      await waitFor(() => /beta-work.*\(on hold\) WAITING/.test(latestDashboardFrame(term)))
 
       // Removing the selected final row chooses its predecessor, not a stale
       // row index. Let the polling projection reconcile, then p must target
@@ -7017,13 +7019,13 @@ describe('abDispatch interactive keyboard controls', () => {
         return (
           frame.includes('repository PAUSED') &&
           frame.includes('intake OFF') &&
-          /T-held.*\(held\)\s+QUEUED/.test(frame)
+          /T-held.*\(held\)\s+STARTING/.test(frame)
         )
       })
       const firstFrame = term.frames.find((frame) => stripAnsi(frame).includes('Autobuild'))
       expect(firstFrame).toBeDefined()
       expect(stripAnsi(firstFrame!)).toContain('repository PAUSED')
-      expect(stripAnsi(firstFrame!)).toMatch(/T-held.*\(held\)\s+QUEUED/)
+      expect(stripAnsi(firstFrame!)).toMatch(/T-held.*\(held\)\s+STARTING/)
 
       input.press('resume')
       await waitFor(() => {
@@ -7145,10 +7147,14 @@ describe('abDispatch interactive keyboard controls', () => {
       await ack('beta-work', 'build.resumed')
       await waitFor(() => {
         const frame = latestDashboardFrame(term)
-        return /alpha-work.*RUNNING/.test(frame) && /beta-work.*RUNNING/.test(frame)
+        // Settled builds hold no slot: they read WAITING again, not RUNNING.
+        return (
+          /alpha-work.*\(merge decision\) WAITING/.test(frame) &&
+          /beta-work.*\(merge decision\) WAITING/.test(frame)
+        )
       })
 
-      // RUNNING is the one state in which build-row `p` is offered. Intake
+      // A running build is the one state in which build-row `p` is offered. Intake
       // staying ON is the sharpest proof the per-build route ran, not the bulk.
       input.press('down')
       await waitFor(() => /^ > .*alpha-work/m.test(latestDashboardFrame(term)))
@@ -7156,7 +7162,12 @@ describe('abDispatch interactive keyboard controls', () => {
       await waitFor(async () => (await countCommands('alpha-work', 'build.pause-requested')) === 2)
       await waitFor(() => {
         const frame = latestDashboardFrame(term)
-        return /alpha-work.*PAUSING/.test(frame) && /beta-work.*RUNNING/.test(frame)
+        // Without a slot, alpha keeps its word until the pause is acknowledged.
+        return (
+          frame.includes('p cancel pause') &&
+          /alpha-work.*\(merge decision\) WAITING/.test(frame) &&
+          /beta-work.*\(merge decision\) WAITING/.test(frame)
+        )
       })
       expect(await countCommands('beta-work', 'build.pause-requested')).toBe(1)
       expect(latestDashboardFrame(term)).toContain('intake ON')
@@ -8693,12 +8704,17 @@ describe('abDispatch interactive keyboard controls', () => {
         type: 'build.abort-requested',
         payload: {},
       })
+      // A merge-waiting build holds no slot, so it keeps its word until the
+      // abort is acknowledged (SPEC §14); the progress stage still shows.
       await waitFor(() => {
         const frame = latestPaintedFrame(term)
-        return frame.includes('status ABORTING') && !frame.includes(`Abort ${slug} and delete`)
+        return (
+          frame.includes('waiting for running work to stop') &&
+          !frame.includes(`Abort ${slug} and delete`)
+        )
       })
       let frame = latestPaintedFrame(term)
-      expect(frame).toContain('waiting for running work to stop')
+      expect(frame).toContain('status WAITING (merge decision)')
       expect(frame).not.toMatch(/\b[prda] (?:pause|cancel pause|resume|discard|abort)\b/)
 
       const afterRequest = await fx.store.getEvents(slug)

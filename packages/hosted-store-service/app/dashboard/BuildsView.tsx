@@ -17,10 +17,14 @@ import {
   mergeVocabulary,
   mergeSummary,
   mergedChildren,
+  buildStatusText,
+  harvestStatusText,
   type DashboardBuild,
   repositoryActionAvailability,
   type DashboardHarvest,
   type DashboardModel,
+  type DashboardTone,
+  type StatusText,
 } from '@defrex/autobuild/operator-presentation'
 import type { OperatorTicketDetail } from '@defrex/autobuild-hosted-store-service/operator-api'
 import Link from 'next/link'
@@ -134,29 +138,35 @@ export interface BuildPageViewProps {
   onAnswer: (slug: string, body: OperatorAnswerRequest) => void
 }
 
-type Tone = 'alert' | 'warn' | 'live' | 'ok'
+type Tone = 'alert' | 'warn' | 'live' | 'ok' | 'slack'
 
-/** The terminal renderer's status color map, as tones. */
-function statusTone(status: DashboardBuild['status'] | DashboardHarvest['status']): Tone {
-  switch (status) {
-    case 'collecting':
-    case 'queued':
-    case 'resuming':
-      return 'live'
-    case 'running':
-      return 'ok'
-    case 'pausing':
-    case 'paused':
-    case 'suspended':
-    case 'cleaning':
-    case 'escalated':
-    case 'waiting':
-      return 'warn'
-    case 'blocked':
-    case 'aborting':
-    case 'failed':
-      return 'alert'
-  }
+/** The web class for each shared tone. Status words and their tones come from
+ * the shared table (`buildStatusText`); this only names the CSS class. */
+const TONE_CLASS: Record<DashboardTone, Tone> = {
+  ok: 'ok',
+  live: 'live',
+  held: 'warn',
+  alert: 'alert',
+  pending: 'slack',
+}
+
+/** A build row's shared status word, tone and note. */
+function rowStatus(row: DashboardBuild): StatusText {
+  return buildStatusText({
+    status: row.status,
+    ...(row.slot !== undefined ? { slot: row.slot } : {}),
+    ...(row.statusBasis !== undefined ? { basis: row.statusBasis } : {}),
+  })
+}
+
+/** A status word with its note, which explains it in slack. */
+function StatusWord({ text }: { text: StatusText }) {
+  return (
+    <span className="status" data-tone={text.tone}>
+      {text.note !== undefined && <span className="status-note">({text.note}) </span>}
+      <Flash value={text.word}>{text.word}</Flash>
+    </span>
+  )
 }
 
 function reviewCeilingText(build: DashboardBuild): string | undefined {
@@ -225,7 +235,10 @@ export function BuildsView(props: BuildsViewProps) {
 
   const widths = columnWidths(
     model.builds.map((row) => row.ticketId),
-    [...model.builds.map((row) => row.status), ...(model.harvest ? [model.harvest.status] : [])],
+    [
+      ...model.builds.map((row) => rowStatus(row).word),
+      ...(model.harvest ? [harvestStatusText(model.harvest.status).word] : []),
+    ],
     model.harvest !== undefined,
   )
   const vars: CellVars = {
@@ -468,15 +481,13 @@ function HarvestRow({
             {harvest.rounds} {harvest.rounds === 1 ? 'round' : 'rounds'}
           </span>
         </span>
-        <span className="status" data-status={harvest.status}>
-          <Flash value={harvest.status}>{harvest.status.toUpperCase()}</Flash>
-        </span>
+        <StatusWord text={harvestStatusText(harvest.status)} />
       </div>
       <StepLine steps={harvest.steps} now={now} label="Harvest pipeline" />
       {harvest.detail !== undefined && (
         <MessagePreview
           value={harvest.detail}
-          tone={statusTone(harvest.status)}
+          tone={TONE_CLASS[harvestStatusText(harvest.status).tone]}
           expandable={false}
         />
       )}
@@ -505,7 +516,7 @@ function BuildRow({
   onOpen: BuildsViewProps['onOpenBuild']
   onRowBuildControl: BuildsViewProps['onRowBuildControl']
 }) {
-  const tone = statusTone(row.status)
+  const tone = TONE_CLASS[rowStatus(row).tone]
   return (
     // biome-ignore lint/a11y/useKeyWithClickEvents: the row surface is a pointer convenience; the title link is the keyboard path
     <li
@@ -653,9 +664,7 @@ function BuildSummary({
       <div className="rowline">
         <span className="lane" aria-hidden />
         {heading}
-        <span className="status" data-status={row.status}>
-          <Flash value={row.status}>{row.status.toUpperCase()}</Flash>
-        </span>
+        <StatusWord text={rowStatus(row)} />
       </div>
       <div className="build-meta">
         <span className="slug">{row.slug}</span>

@@ -10,6 +10,7 @@ import { handoffCapture } from './handoff-capture'
 import { parkedSlotWaitCapture } from './parked-slot-wait-capture'
 import { OPTIMIZATION_NODE_SLUG, optimizationNodeCapture } from './optimization-node-capture'
 import { ticketWaitCapture, ticketWaitSlug } from './ticket-wait-capture'
+import { harvestAttentionCapture, statusVocabularyCapture } from './status-vocabulary-capture'
 import { harvestSuspensionCapture } from './harvest-suspension-capture'
 import { nativeSessionCapture } from './native-session-capture'
 import { judgeSessionCapture } from './judge-session-capture'
@@ -70,6 +71,10 @@ export interface FrameSpec {
   ground?: 'light'
   selection?: DashboardModel['selection']
   harvestSuspended?: boolean
+  /** Re-project rows into the status words no scenario reaches. */
+  statusVocabulary?: boolean
+  /** A harvest run that needs a human. */
+  harvestAttention?: 'escalated' | 'failed'
   rollback?: boolean
   handoff?: boolean
   parkedSlotWait?: boolean
@@ -132,7 +137,7 @@ const SCRIPTED_BLOCKER = [
   'EXPANDED FINAL LINE: dashboard message preview complete.',
 ].join('\n')
 
-const HELD_EVIDENCE = ['repository PAUSED', 'CAP-QUEUED', '(held)', 'QUEUED'] as const
+const HELD_EVIDENCE = ['repository PAUSED', 'CAP-QUEUED', '(held)', 'STARTING'] as const
 
 /** Scripted live mid-turn: session header, labelled prompt, a step, reasoning
  * and answer deltas, and a tool call whose output has not landed yet. */
@@ -250,6 +255,23 @@ export const FRAME_SPECS: readonly FrameSpec[] = [
       '! reconcile waiting for a slot ahead of normal ticket claims',
     ],
   },
+  {
+    id: 'status-vocabulary-wide',
+    scenario: 'happy',
+    columns: 180,
+    rows: 42,
+    statusVocabulary: true,
+    requires: ['ABORTING', 'MERGING', '(merge decision) WAITING', 'RUNNING', 'active 3/6'],
+  },
+  ...(['escalated', 'failed'] as const).map((outcome) => ({
+    id: `harvest-${outcome}-wide`,
+    // The happy scenario forbids failure text; a failed harvest is one.
+    scenario: 'mixed' as const,
+    columns: 180,
+    rows: 42,
+    harvestAttention: outcome,
+    requires: ['Harvest', outcome.toUpperCase()],
+  })),
   {
     id: 'harvest-suspended-wide',
     scenario: 'happy',
@@ -721,6 +743,23 @@ const HAPPY_CAPTURE_CONFIG_TOML = CONFIG_TOML.replace('capacity = 2', 'capacity 
 )
 const HAPPY_LEASE_TTL_MS = 24 * 60 * 60 * 1000
 
+/** The dispatcher's launch fact for a scripted runner that is still working,
+ * as real dispatch records it beside `runner.attached`. It keeps the stepping
+ * clock where it was, so the scripted timeline does not move. */
+async function executionStarted(
+  harness: E2eHarness,
+  slug: string,
+  instance: string,
+  workspaceRef = slug,
+): Promise<void> {
+  await harness.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'dashboard-capture', workspaceRef, instance },
+  })
+  harness.clock.advance(-1000)
+}
+
 /** Read the harness's one-second stepping clock without advancing it. */
 function peekClock(clock: E2eHarness['clock']): Date {
   const now = clock()
@@ -1036,6 +1075,7 @@ mode = "auto"
         },
       },
     })
+    await executionStarted(harness, slug, slug)
     await harness.store.append(slug, {
       actor: KERNEL,
       type: 'runner.attached',
@@ -1622,6 +1662,7 @@ async function seedHappyBuild(
       payload: { artifact: { kind: spec!.kind, rev: spec!.revision }, ticket },
     }),
   )
+  await executionStarted(harness, build.slug, `capture-${build.slug}`, workspacePath)
   await harness.store.append(build.slug, {
     actor: KERNEL,
     type: 'runner.attached',
@@ -2148,15 +2189,20 @@ async function capturePaint(
               ? handoffCapture(model)
               : spec.parkedSlotWait
                 ? parkedSlotWaitCapture(model)
-                : spec.ticketWait
-                  ? ticketWaitCapture(model)
-                  : spec.optimizationNode
-                    ? optimizationNodeCapture(model, harness.config)
-                    : model
+                : spec.statusVocabulary
+                  ? statusVocabularyCapture(model)
+                  : spec.ticketWait
+                    ? ticketWaitCapture(model)
+                    : spec.optimizationNode
+                      ? optimizationNodeCapture(model, harness.config)
+                      : model
       const ticketWaitDetail = spec.ticketWait === 'detail' ? ticketWaitSlug(model) : undefined
       const presented = {
         ...sourceModel,
         ...(spec.harvestSuspended ? { harvest: harvestSuspensionCapture() } : {}),
+        ...(spec.harvestAttention
+          ? { harvest: harvestAttentionCapture(spec.harvestAttention) }
+          : {}),
         ...(spec.selection ? { selection: spec.selection } : {}),
         // Runtime commits include generated fixture bytes; keep their visible
         // provenance stable just like the scripted clock and repository name.
@@ -2418,7 +2464,7 @@ export async function captureDashboardFrames(
         '- [ ] Every PNG opens and is non-empty.',
         '- [ ] Rows, statuses, progress, and separators do not overlap.',
         '- [ ] The Harvest row remains legible and long list messages show a three-row preview/count.',
-        '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
+        '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining STARTING.',
         '- [ ] The narrow frame truncates deliberately without clipping.',
         '- [ ] Colour emphasis is present and literal statuses remain readable.',
         '- [ ] Unicode samples in the warning, blocker, composer, and transcript are readable, unsplit,',

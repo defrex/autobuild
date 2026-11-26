@@ -3,6 +3,7 @@ import { validateEventWrite, type AbEvent } from '../packages/core/src/events/ca
 import { KERNEL, DISPATCHER } from '../packages/core/src/events/envelope'
 import { reduceBuild } from '../packages/core/src/kernel/reducer'
 import { projectBuild, type DashboardModel } from '../packages/core/src/cli/dashboard/model'
+import { slotState } from '../packages/core/src/kernel/dispatch-capacity'
 const at = '2026-07-15T12:09:00.000Z'
 const config = parseConfig(
   `[tickets]\nsource="file"\nreadyState="ready"\n[commands]\ntest="true"\n[verify]\nsteps=[["unit","integration"]]\n[verify.unit]\nkind="check"\ncommand="test"\nfailFast=true\n[verify.integration]\nkind="check"\ncommand="test"`,
@@ -39,6 +40,11 @@ export function verifyStagesCapture(model: DashboardModel): DashboardModel {
         },
       }),
       validateEventWrite({
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { provider: 'git-worktree', workspaceRef: '/capture', instance: 'capture' },
+      }),
+      validateEventWrite({
         actor: KERNEL,
         type: 'runner.attached',
         payload: { instance: 'capture', host: 'capture' },
@@ -73,12 +79,16 @@ export function verifyStagesCapture(model: DashboardModel): DashboardModel {
       seq: i + 1,
       ts: at,
     })) as AbEvent[]
-    return projectBuild(
-      { slug, repo: 'capture', createdAt: at, updatedAt: at },
-      reduceBuild(events),
-      config,
-      events,
-    )!
+    const record = { slug, repo: 'capture', createdAt: at, updatedAt: at }
+    const state = reduceBuild(events)
+    const slot = slotState({ record, state, workspace: true }, new Date(at))
+    return { ...projectBuild(record, state, config, events)!, ...(slot ? { slot } : {}) }
   })
-  return { ...model, builds: [...rows, ...model.builds] }
+  // Both rows run verification, so each holds a slot beside the model's own.
+  const held = rows.filter((row) => row.slot?.state === 'held').length
+  return {
+    ...model,
+    active: { ...model.active, current: model.active.current + held },
+    builds: [...rows, ...model.builds],
+  }
 }

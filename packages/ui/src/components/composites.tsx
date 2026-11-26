@@ -115,6 +115,9 @@ export interface BuildRowModel {
   href?: string
   /** Parenthesised annotations beside the status, such as `(paused)`. */
   flags?: readonly { term: string; tone: StateTone }[]
+  /** Why the build shows its status word (`merge decision`), in slack just
+   * before the word. */
+  note?: string
   meta?: ReactNode
   lines?: readonly RowLine[]
   steps: Step[]
@@ -140,13 +143,18 @@ export function BuildRow({ build }: { build: BuildRowModel }) {
               <span>{build.title}</span>
             </span>
           )}
-          {build.flags !== undefined && build.flags.length > 0 && (
+          {((build.flags !== undefined && build.flags.length > 0) || build.note !== undefined) && (
             <span data-ansi="row-flags">
-              {build.flags.map((flag) => (
+              {build.flags?.map((flag) => (
                 <span key={flag.term} data-ansi="row-flag" data-tone={flag.tone}>
                   ({flag.term})
                 </span>
               ))}
+              {build.note !== undefined && (
+                <span data-ansi="row-flag" data-tone="pending">
+                  ({build.note})
+                </span>
+              )}
             </span>
           )}
           <span data-ansi="state-slot" data-flow-slot="">

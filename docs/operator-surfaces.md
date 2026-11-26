@@ -59,6 +59,30 @@ Status output reports each nonterminal build's slot state, by the rules the disp
 - `capacity.occupied` counts exactly the `held` entries. A requested build is a slot waiter.
 - A missing value is unknown, from a server older than this field. It is never `none`, and text prints `unknown`. A `done` build reports no slot state.
 
+### Status words
+
+Every nonterminal build row on both dashboards, `ab builds` and `ab build status` shows one word from one closed vocabulary. The color says whether the build holds a slot; the word says why, and a short note says which case.
+
+| Word | Color | Slot | Shown when |
+|---|---|---|---|
+| `RUNNING` | green | held | A runner is working. |
+| `STARTING` | green | held | No runner works yet: a newly claimed build provisioning, a relaunch, spec publication, an upgrade drain, a suspended session. |
+| `PAUSING` | green | held | A pause was requested and the runner is still stopping. |
+| `ABORTING` | green | held | An abort was requested and the runner is still stopping. |
+| `QUEUED` | teal | requested | Parked work waiting for admission. The note names the request (`resume`, `reconcile`, `verification`, `reopen`, `propose`) and marks urgent waiters. |
+| `WAITING` | amber | none | A finished pipeline waiting for a merge decision (`merge decision`) or on hold (`on hold`), a ticket wait (`on <ids>`), or a `revise-spec` answer waiting for its revision (`spec revision`). |
+| `MERGING` | amber | none | A finished pipeline with merge consent, waiting for merge gates or the forge. |
+| `PAUSED` | amber | none | An acknowledged pause. |
+| `COLLECTING` | amber | none | An integration build collecting child work. |
+| `BLOCKED` | red | none | An open escalation, or a failed node verification waiting for a repair child. |
+| `CLEANING` | dim | none | Abort cleanup. |
+
+- Green means held: the active counter `<occupied>/<capacity>` counts the green rows.
+- `PAUSING` and `ABORTING` appear only on a build that holds a slot. A build without one keeps its word until the pause or abort is acknowledged.
+- A Harvest row never holds a slot: `HARVESTING` (teal) while it works, `PAUSED` or `SUSPENDED` (amber) while stopped, `ESCALATED` or `FAILED` (red) when it needs a human.
+- `ab builds` prints the word and note in `STATUS`; JSON adds `statusWord` (`{word, tone, note?}`), while `status` stays the lifecycle status the filters select on.
+- `ab builds` and `ab build status` color the word with its tone on an interactive terminal, and print it plain when piped or under `--json`.
+
 A local CLI can use a remote Store:
 
 <!-- seam-config:start -->
