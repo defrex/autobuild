@@ -15,6 +15,10 @@ import { handoffCapture } from '../../../tools/handoff-capture'
 import { parkedSlotWaitCapture } from '../../../tools/parked-slot-wait-capture'
 import { ticketWaitCapture, ticketWaitSlug } from '../../../tools/ticket-wait-capture'
 import { harvestSuspensionCapture } from '../../../tools/harvest-suspension-capture'
+import {
+  harvestAttentionCapture,
+  statusVocabularyCapture,
+} from '../../../tools/status-vocabulary-capture'
 import { ConnectionView } from '../../hosted-store-service/app/connect/Connection'
 import ConnectionPage from '../../hosted-store-service/app/connect/page'
 /**
@@ -238,6 +242,18 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'reconcile waiting for a slot ahead of normal ticket claims',
     ],
   })),
+  ...['wide', 'narrow'].map((size) => ({
+    id: `builds-status-vocabulary-${size}`,
+    width: size === 'narrow' ? 390 : 1440,
+    height: 2200,
+    requires: ['ABORTING', 'MERGING', '(merge decision)', 'WAITING', 'RUNNING', 'HARVESTING'],
+  })),
+  {
+    id: 'builds-harvest-escalated-wide',
+    width: 1440,
+    height: 1000,
+    requires: ['Harvest', 'ESCALATED'],
+  },
   ...['wide', 'narrow'].map((size) => ({
     id: `builds-ticket-wait-${size}`,
     width: size === 'narrow' ? 390 : 1440,
@@ -549,7 +565,12 @@ const SCENARIOS: readonly WebFrameSpec[] = [
     id: 'builds-parked-no-consent-wide',
     width: 1440,
     height: 1300,
-    requires: ['merge(waiting)', 'Merge awaits consent', 'ab merge complete-dashboard-evidence'],
+    requires: [
+      'merge(waiting)',
+      'Merge awaits consent',
+      'ab merge complete-dashboard-evidence',
+      'WAITING',
+    ],
     forbids: [
       'BLOCKED',
       'QUEUED',
@@ -568,6 +589,7 @@ const SCENARIOS: readonly WebFrameSpec[] = [
       'Awaiting a human merge',
       'GitHub refused the merge',
       'merge PR #3 on GitHub',
+      'MERGING',
     ],
     forbids: ['merge awaits consent', 'merge requested', 'BLOCKED', 'QUEUED'],
   },
@@ -988,10 +1010,14 @@ function parkedNoConsentModel(source: DashboardModel): DashboardModel {
     harvestPaused: false,
     harvest: undefined,
     defaultAutoMerge: true,
+    // A finished pipeline waiting for its merge decision holds no slot.
+    active: { ...source.active, current: 0 },
     builds: [
       {
         ...origin,
         status: 'running',
+        slot: { state: 'none' },
+        statusBasis: { resting: 'running', runner: false, settled: 'decision' },
         alsoPaused: false,
         dispatch: undefined,
         sessions: undefined,
@@ -1047,6 +1073,8 @@ function humanMergeModel(source: DashboardModel): DashboardModel {
     builds: [
       {
         ...build,
+        // Consent is given: it waits on a human merge at the forge.
+        statusBasis: { resting: 'running', runner: false, settled: 'merging' },
         autoMerge: 'human-merge',
         blockers: [reason],
         landing: { ...build.landing, decision, fallback },
@@ -1091,6 +1119,14 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
     const slug = ticketWaitSlug(models.mixed)
     if (slug === undefined) throw new Error('web dashboard capture: no ticket-wait row to page')
     return shell(buildPage(model, slug), { model })
+  }
+  if (spec.id.startsWith('builds-status-vocabulary-')) {
+    const model = statusVocabularyCapture(models.happy)
+    return shell(builds(model), { model })
+  }
+  if (spec.id === 'builds-harvest-escalated-wide') {
+    const model = { ...models.happy, harvest: harvestAttentionCapture('escalated') }
+    return shell(builds(model), { model })
   }
   if (spec.id.startsWith('builds-parked-slot-wait-')) {
     const model = parkedSlotWaitCapture(models.happy)
@@ -1207,7 +1243,11 @@ async function frameNode(spec: WebFrameSpec, models: WebFixtureModels): Promise<
       )
     case 'builds-mixed-paused-wide': {
       const slug = blockedSlug(models.mixed)
-      const model = changedBuildModel(models.mixed, slug, { status: 'paused' })
+      const model = changedBuildModel(models.mixed, slug, {
+        status: 'paused',
+        slot: { state: 'none' },
+        statusBasis: { resting: 'paused', runner: false },
+      })
       return shell(buildPage(model, slug), { model })
     }
     case 'builds-auto-merge-on-wide': {

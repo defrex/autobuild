@@ -130,7 +130,7 @@ export function MessagePreview({
   expandable,
 }: {
   value: string
-  tone: 'alert' | 'warn' | 'live' | 'ok'
+  tone: 'alert' | 'warn' | 'live' | 'ok' | 'slack'
   expandable: boolean
 }) {
   const rows = messageRows(value)

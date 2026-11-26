@@ -5058,7 +5058,7 @@ using a slot and the word tells why.
 | | held | `PAUSING` | a pause was requested and the runner is still stopping |
 | | held | `ABORTING` | an abort was requested and the runner is still stopping |
 | teal (`live`) | requested | `QUEUED` | parked work waiting for admission; the note names the request (`resume`, `reconcile`, `verification`, `reopen`, `propose`) and marks urgent waiters |
-| amber (`held`) | none | `WAITING` | a finished pipeline waiting for a merge decision or on hold, or an entered ticket wait; the note says which |
+| amber (`held`) | none | `WAITING` | a finished pipeline waiting for a merge decision or on hold, an entered ticket wait, or a `revise-spec` answer waiting for its revision; the note says which (`merge decision`, `on hold`, `on <tickets>`, `spec revision`) |
 | | none | `MERGING` | a finished pipeline with merge consent, waiting for merge gates or for the forge to merge |
 | | none | `PAUSED` | an acknowledged pause |
 | | none | `COLLECTING` | an integration build collecting child work |
