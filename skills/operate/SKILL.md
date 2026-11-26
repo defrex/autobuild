@@ -326,9 +326,11 @@ Read events with a cursor or a small `--events` count; logs are long.
   resumes under the revised spec and its publication is confirmed; a finished
   leaf waiting for its merge decision revises with `ab reopen`. Answering a
   ticket wait's escalation ends the wait early; the dispatcher ends it when its
-  tickets complete (see ticket wait attention). A blocked build holds no slot,
-  and an answer does not give it one: it waits as a `resume` request ahead of
-  normal ticket claims (urgent work first) until a slot frees. Run
+  tickets complete (see ticket wait attention). A blocked build holds no slot
+  once nothing is still working on it, and an answer does not give it one: it
+  waits as a `resume` request ahead of normal ticket claims (urgent work
+  first) until a slot frees. A build whose other verify steps, launch or
+  execution still run keeps its slot through the answer and requests nothing. Run
   `ab help answer` for the full menu.
 - `ab pause <slug>` / `ab resume <slug>`; `ab pause --all` / `ab resume --all`
   hold and release the whole repository. Pause immediately interrupts live agent
@@ -863,8 +865,8 @@ unfinished or automatically authorized candidates do not ask for attention.
 Queued and held candidates hold no capacity slot; one that must re-verify or
 reconcile waits for a slot ahead of normal ticket claims (urgent work first), so
 a full repository delays it without failing it. A build waiting on other
-tickets, paused, or blocked on a question holds no slot either, and takes one
-ahead of normal claims once its wait ends.
+tickets, paused, or blocked on a question with nothing still working on it
+holds no slot either, and takes one ahead of normal claims once its wait ends.
 
 Select a queue build in the terminal and use `l merge` or `o hold`, or run
 `ab merge <slug>` / `ab hold <slug>`. MCP uses `builds.control` with action `merge`

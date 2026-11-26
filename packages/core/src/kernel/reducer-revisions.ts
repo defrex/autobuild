@@ -75,4 +75,5 @@ export const REDUCER_REVISIONS: Readonly<Record<string, string>> = {
   'repositoryReadFacts/shape/mggr8x6l5z': '#1279 reported dispatcher run tracks pending runs',
   'repositoryReadFacts/fold/vvcfmd23zp': '#1279 status describes the authority run',
   'build/shape/rclfl10h8j': 'Durable slot admission and release seqs (SPEC §12 What holds a slot)',
+  'build/fold/4hkypq2buv': '#1348 answers release a slot only when the build was not carried',
 }

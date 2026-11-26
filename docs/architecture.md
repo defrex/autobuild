@@ -851,15 +851,27 @@ The advisory `pipeline.settled` fact records that the engine reached a leaf's
 facts: the build reducer folds `slotAdmittedSeq` (`build.created`, or the
 advisory `slot.admitted` the dispatcher's `leafAdmission` appends with
 `appendIfCurrent` before any lease, provisioning or launch) and
-`slotReleasedSeq` (`pipeline.settled`, an answer closing an open escalation,
-`wait.ended`, `build.paused`). `kernel/dispatch-capacity.ts`'s `leafHoldsSlot`
-holds a leaf admitted since its last release that does not wait on the
-outside world (`leafOutsideWait`: blocked, an acknowledged pause, a pending
-`revise-spec`, or a finished pipeline with no epilogue work due). Runner
-liveness never enters, so a leftover runner never takes a slot back. Every
-other leaf without a slot requests one, `resume` unless an epilogue reason
-names another. `leafAdmission` neither gates nor admits a leaf that holds its
-slot, still waits on the outside world, or acknowledges a pause or abort. Node
+`slotReleasedSeq` (`pipeline.settled`, an answer closing an open escalation
+or a `wait.ended` while the build is not carried, `build.paused`).
+`kernel/dispatch-capacity.ts`'s `leafHoldsSlot` holds a leaf admitted since
+its last release that does not wait on the outside world (`leafOutsideWait`:
+blocked, an acknowledged pause, a pending `revise-spec`, or a finished
+pipeline with no epilogue work due), or whose only wait is open escalations
+that `escalationCarried` (`kernel/verify-stage-state.ts`) carries: (A) a
+verify stage member's question while another member runs, the engine's stage
+exemption; (E) an open execution whose launch record precedes it, with no launch
+failure or refusal between them; (L) a launch
+record newer than the latest `execution.started`, launch failure and open
+`execution-no-progress` refusal; or (B) an execution older than the earliest
+open raise. Apart from (L)'s refusal, which the progress guard raises in place
+of a launch, only (A) looks at escalations.
+The answer fold applies the same predicate. Runner liveness never enters; only
+launch records and execution facts do. Every other leaf without a slot
+requests one, `resume` unless an epilogue reason names another.
+`leafAdmission` admits a leaf that holds its slot at once, appending
+`slot.admitted {}` as its launch record unless one is in flight or a live
+lease will refuse the launch; it neither gates nor records for a leaf that
+still waits on the outside world or acknowledges a pause or abort. Node
 admission (`nodeHasCapacity`) counts every slot holder;
 there is no descendant borrowing.
 Reopening a settled leaf (SPEC §15.7) spans the same seams. The shared

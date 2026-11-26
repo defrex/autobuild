@@ -4357,6 +4357,67 @@ export async function slotAdmissionReadBudget(opts: {
   expect(admissions() - admitted).toBe(1)
 }
 
+/** A leaf whose question was answered while its runner still worked keeps
+ * the slot it never gave up (SPEC §12 "What holds a slot", #1348): idle ticks
+ * over it, at 100 and 100,000 events, read no historical event rows, append
+ * nothing (no per-tick launch record), force no ready listing, launch nothing,
+ * and leave it held. */
+export async function runnerRetainedSlotReadBudget(opts: {
+  store: import('../store/memory').MemoryBuildStore
+  /** The retained leaf; filler events extend its log. */
+  slug: string
+  tick: () => Promise<unknown>
+  listed: () => number
+  launched: () => number
+  /** Advance the clock by a small fraction of the scan interval. */
+  advance: () => void
+  /** Advance the clock past the scan interval, so the next scan is due. */
+  advanceDue: () => void
+  held: () => Promise<boolean>
+}): Promise<void> {
+  const { store, slug } = opts
+  const events = buildEventRows(store, slug)
+  const appended = () => {
+    let total = 0
+    for (const build of (
+      Reflect.get(store, 'builds') as Map<string, { events: unknown[] }>
+    ).values())
+      total += build.events.length
+    for (const repo of (Reflect.get(store, 'repos') as Map<string, { events: unknown[] }>).values())
+      total += repo.events.length
+    return total
+  }
+  for (const length of [100, 100_000]) {
+    while (events.length < length)
+      await store.append(slug, {
+        actor: humanActor('budget'),
+        type: 'build.auto-merge-cancelled',
+        payload: {},
+      })
+    opts.advanceDue()
+    await opts.tick()
+    opts.advance()
+    await opts.tick()
+    const boundary = events.at(-1)!.seq
+    const metrics = { historicalRows: 0, tailRows: 0 }
+    const restore = instrumentBuildRows(store, slug, () => boundary, metrics)
+    const before = { listed: opts.listed(), launched: opts.launched(), appended: appended() }
+    try {
+      for (let tick = 0; tick < 3; tick++) {
+        opts.advance()
+        await opts.tick()
+      }
+    } finally {
+      restore()
+    }
+    expect(metrics.historicalRows).toBe(0)
+    expect(opts.listed() - before.listed).toBe(0)
+    expect(opts.launched() - before.launched).toBe(0)
+    expect(appended() - before.appended).toBe(0)
+    expect(await opts.held()).toBe(true)
+  }
+}
+
 /** Open-PR backpressure (SPEC §12 Intake order) counts open root PRs over the
  * capacity builds the tick already loaded and reads its engagement from the
  * advanced repository view: a quiet intake tick with backpressure engaged

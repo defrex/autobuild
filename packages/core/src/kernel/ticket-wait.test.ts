@@ -637,10 +637,21 @@ describe('capacity: ticket waits', () => {
       workspace: true,
     }
   }
-  const open = () => reduce([...planWait(), entered('wait_1', 'esc_w')])
+  const execution = (type: 'execution.started' | 'execution.ended') =>
+    type === 'execution.started'
+      ? ev(type, { provider: 'local', workspaceRef: '/ws/a', instance: 'i1' })
+      : ev(type, { instance: 'i1', workspaceRef: '/ws/a', outcome: 'completed' })
+  // Its runner ran the declaring phase and stopped on the declaration.
+  const stoppedWait = () => [
+    ...planWait().slice(0, prelude().length),
+    execution('execution.started'),
+    ...planWait().slice(prelude().length),
+    execution('execution.ended'),
+  ]
+  const open = () => reduce([...stoppedWait(), entered('wait_1', 'esc_w')])
   const answered = () =>
     reduce([
-      ...planWait(),
+      ...stoppedWait(),
       entered('wait_1', 'esc_w'),
       ev('escalation.answered', { id: 'esc_w', answer: 'B landed', resolution: 'guidance' }),
     ])
@@ -658,19 +669,13 @@ describe('capacity: ticket waits', () => {
     })
   })
 
-  test('an entered wait holds no slot whatever its runner or a co-open question', () => {
+  test('an entered wait holds no slot once its runner stops, whatever its lease or a co-open question', () => {
     expect(occupiesCapacity(capacityBuild('a', open(), true), now)).toBe(false)
-    const executing = open()
-    executing.openExecution = {
-      provider: 'vercel-sandbox',
-      workspaceRef: 'ws',
-      instance: 'i',
-      commandId: 'cmd',
-      seq: 1,
-    } as BuildState['openExecution'] & object
-    expect(occupiesCapacity(capacityBuild('a', executing), now)).toBe(false)
+    // Until its execution ends, the runner is still working (#1348).
+    const executing = reduce([...stoppedWait().slice(0, -1), entered('wait_1', 'esc_w')])
+    expect(occupiesCapacity(capacityBuild('a', executing), now)).toBe(true)
     const questioned = reduce([
-      ...planWait(),
+      ...stoppedWait(),
       entered('wait_1', 'esc_w'),
       ev(
         'escalation.raised',
@@ -685,7 +690,7 @@ describe('capacity: ticket waits', () => {
   test('pending and refused requests keep the slot', () => {
     expect(occupiesCapacity(capacityBuild('a', reduce(planWait())), now)).toBe(true)
     const refused = reduce([
-      ...planWait(),
+      ...stoppedWait(),
       ev('wait.refused', { id: 'wait_1', cause: 'completed', tickets: ['B'], message: 'done' }),
     ])
     expect(occupiesCapacity(capacityBuild('a', refused), now)).toBe(true)
@@ -693,7 +698,7 @@ describe('capacity: ticket waits', () => {
 
   test('an ended wait requests a resume slot ahead of normal claims until admitted', () => {
     const automatic = reduce([
-      ...planWait(),
+      ...stoppedWait(),
       entered('wait_1', 'esc_w'),
       ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
     ])
@@ -708,7 +713,7 @@ describe('capacity: ticket waits', () => {
     const admitted = capacityBuild(
       'a',
       reduce([
-        ...planWait(),
+        ...stoppedWait(),
         entered('wait_1', 'esc_w'),
         ev('wait.ended', { id: 'wait_1', cause: 'automatic', message: 'B completed' }),
         ev('slot.admitted', { request: 'resume' }),
@@ -723,7 +728,7 @@ describe('capacity: ticket waits', () => {
     paused.status = 'paused'
     expect(slotRequest(capacityBuild('a', paused), now)).toBeUndefined()
     const revise = reduce([
-      ...planWait(),
+      ...stoppedWait(),
       entered('wait_1', 'esc_w'),
       ev('escalation.answered', { id: 'esc_w', answer: 'rewrite', resolution: 'revise-spec' }),
     ])

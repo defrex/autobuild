@@ -375,6 +375,24 @@ async function seedBuild(
   return slug
 }
 
+/** The claim's first execution ran and stopped, spending the launch record
+ * its `build.created` is: a question raised after it waits on a human alone
+ * (SPEC §12 "What holds a slot"). The harness's launches record no
+ * execution, so a fixture that models a stopped runner says so. */
+async function firstRunEnded(h: Pick<Harness, 'store'>, slug: string, instance = 'first-run') {
+  const workspaceRef = `/ws/ab/${slug}`
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.started',
+    payload: { provider: 'fake', workspaceRef, instance },
+  })
+  await h.store.append(slug, {
+    actor: DISPATCHER,
+    type: 'execution.ended',
+    payload: { instance, workspaceRef, outcome: 'completed' },
+  })
+}
+
 async function seedHostedPrAttachment(h: Harness, slug: string, name = 'screenshot', assetId = 7) {
   const designated = await h.store.append(slug, {
     actor: agentActor('verify:visual', 's_visual'),
@@ -1331,6 +1349,7 @@ readyState = "Ready"
     for (const release of ['blocked', 'paused'] as const) {
       const h = harness({ tickets: [readyTicket('T-1')] })
       await seedBuild(h, { slug: 'stuck' })
+      await firstRunEnded(h, 'stuck')
       await h.store.append(
         'stuck',
         release === 'blocked'
@@ -6071,6 +6090,7 @@ describe('Dispatcher startup resume', () => {
   test('an already-recorded human answer is actionable on startup without another answer', async () => {
     const h = harness()
     const slug = await seedBuild(h)
+    await firstRunEnded(h, slug)
     await h.store.append(slug, {
       actor: KERNEL,
       type: 'escalation.raised',
@@ -10225,9 +10245,48 @@ for (const resumeCurrent of [false, true]) {
     }
     for (let i = 0; i < 3; i++) await h.dispatcher.tick({ resumeCurrent })
     expect(h.launches).toEqual([])
-    expect(
-      (await h.store.getEvents(slug)).filter((e) => e.type === 'escalation.raised'),
-    ).toHaveLength(1)
+    const raised = (await h.store.getEvents(slug)).filter((e) => e.type === 'escalation.raised')
+    expect(raised).toHaveLength(1)
+    // The refusal ends the launch its record began: the stopped build waits
+    // on a human alone, so it holds no slot, and answered it resumes (#1348).
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'none' })
+    // A pause acknowledgement launched now reuses no refused record: its
+    // execution takes no slot.
+    await controlBuild({
+      store: h.store,
+      repo: REPO,
+      slug,
+      user: 'operator',
+      action: { kind: 'pause' },
+    })
+    await h.dispatcher.tick({ resumeCurrent })
+    expect(h.launches).toEqual([slug])
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { instance: 'ack', provider: 'fake', workspaceRef: '/ws/ab/auth-limit' },
+    })
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'none' })
+    await h.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: {
+        instance: 'ack',
+        workspaceRef: '/ws/ab/auth-limit',
+        outcome: 'completed',
+        exitCode: 0,
+      },
+    })
+    await h.store.append(slug, {
+      actor: humanActor('operator'),
+      type: 'escalation.answered',
+      payload: {
+        id: (raised[0]!.payload as { id: string }).id,
+        answer: 'retry',
+        resolution: 'retry',
+      },
+    })
+    expect(await reportedSlot(h, slug)).toEqual({ state: 'requested', request: 'resume' })
     await controlBuild({
       store: h.store,
       repo: REPO,
@@ -10236,7 +10295,8 @@ for (const resumeCurrent of [false, true]) {
       action: { kind: 'abort' },
     })
     await h.dispatcher.tick({ resumeCurrent })
-    expect(h.launches).toEqual([slug])
+    // The pause acknowledgement, then the abort's.
+    expect(h.launches).toEqual([slug, slug])
   })
 }
 
@@ -17368,12 +17428,14 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       const slug = await parkedBuild(h, 'a-finalizing', 2)
       if (variant === 'paused')
         await h.store.append(slug, { actor: KERNEL, type: 'build.paused', payload: {} })
-      if (variant === 'blocked')
+      if (variant === 'blocked') {
+        await firstRunEnded(h, slug)
         await h.store.append(slug, {
           actor: KERNEL,
           type: 'escalation.raised',
           payload: { id: 'e_1', phase: 'finalize', source: 'stall', question: 'why?' },
         })
+      }
       h.tickets.add(readyTicket('T-next'))
       const waiting = variant !== 'interrupted'
       expect((await h.dispatcher.tick()).dispatched).toBe(waiting ? 1 : 0)
@@ -17940,6 +18002,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
      * no slot until admitted (SPEC §12 "What holds a slot"). */
     async function answeredLeaf(h: Harness, slug: string, lease?: string): Promise<string> {
       await ticketed(h, slug)
+      await firstRunEnded(h, slug)
       if (lease !== undefined) await h.store.claimLease(slug, lease, 120_000)
       await h.store.append(slug, {
         actor: KERNEL,
@@ -17998,6 +18061,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       await ticketed(h, leaf)
       // Claimed: admitted by its build.created.
       expect(await reportedSlot(h, leaf)).toEqual({ state: 'held' })
+      await firstRunEnded(h, leaf)
       await h.store.append(leaf, {
         actor: KERNEL,
         type: 'escalation.raised',
@@ -18023,7 +18087,8 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       expect(await reportedSlot(h, parked)).toEqual({ state: 'none' })
     })
 
-    test('a live runner from before the answer never re-admits it (f_43f94fec)', async () => {
+    // A bare lease is no launch record and no execution: it carries nothing.
+    test('a bare lease from before the answer does not keep the slot (f_43f94fec)', async () => {
       const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
       await busyBuild(h, 'a-busy')
       const leaf = await answeredLeaf(h, 'b-answered', 'runner-old')
@@ -18054,7 +18119,8 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       await h.dispatcher.tick()
       expect(h.launches).toEqual([leaf])
       expect(await admissions(h, leaf)).toBe(1)
-      expect(await types(h, leaf)).not.toContain('execution.started')
+      const launched = await types(h, leaf)
+      expect(launched.slice(launched.indexOf('slot.admitted'))).not.toContain('execution.started')
       h.clock.advance(15 * 60_000)
       const fresh = harness({
         toml: VERIFY_TOML,
@@ -18069,6 +18135,186 @@ describe('capacity counts builds running work, not builds parked for a merge dec
       expect(await admissions(fresh, leaf)).toBe(1)
       expect(await slotWait(fresh, leaf)).toBeUndefined()
     })
+
+    // #1348: a question does not stop work Autobuild started, so the build
+    // keeps the slot that work holds, through its answer.
+    const STAGE_TOML = [
+      '[commands]',
+      'run = "true"',
+      '[verify]',
+      'steps = [["unit", "docs", "types"]]',
+      ...['unit', 'docs', 'types'].flatMap((step) => [
+        `[verify.${step}]`,
+        'kind = "check"',
+        'command = "run"',
+      ]),
+    ].join('\n')
+    const executionStarted = (h: Harness, slug: string, instance: string) =>
+      h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.started',
+        payload: { provider: 'fake', workspaceRef: `/ws/ab/${slug}`, instance },
+      })
+    const executionEnded = (h: Harness, slug: string, instance: string) =>
+      h.store.append(slug, {
+        actor: DISPATCHER,
+        type: 'execution.ended',
+        payload: { instance, workspaceRef: `/ws/ab/${slug}`, outcome: 'completed' },
+      })
+    /** A leaf mid-verification on a working runner, with one stage member's
+     * question open while its siblings run. */
+    async function verifyingWithQuestion(h: Harness, slug: string): Promise<void> {
+      await ticketed(h, slug)
+      await seedLoopsApproved(h, slug)
+      await h.store.claimLease(slug, `runner-${slug}`, 600_000)
+      await executionStarted(h, slug, 'i1')
+      for (const step of ['unit', 'docs', 'types'])
+        await h.store.append(slug, {
+          actor: KERNEL,
+          type: 'verify.started',
+          payload: { step, attempt: 1 },
+        })
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'session.started',
+        payload: {
+          session: 's_types',
+          role: 'verify',
+          runner: 'scripted',
+          phase: 'verify:types',
+          round: 1,
+        },
+      })
+      await h.store.append(slug, {
+        actor: agentActor('verify:types', 's_types'),
+        type: 'escalation.raised',
+        payload: {
+          id: `esc-${slug}`,
+          phase: 'verify:types',
+          round: 1,
+          source: 'agent',
+          question: 'which fixture?',
+        },
+      })
+    }
+    const answerQuestion = (h: Harness, slug: string) =>
+      h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: { id: `esc-${slug}`, answer: 'the old one', resolution: 'guidance' },
+      })
+
+    test('a parallel verify question keeps the slot through a replacement runner and the answer (#1348)', async () => {
+      const h = harness({ toml: STAGE_TOML, onLaunch: claimOnLaunch })
+      const leaf = 'a-verifying'
+      await verifyingWithQuestion(h, leaf)
+      h.tickets.add(readyTicket('T-next'))
+      const held = async () => {
+        await h.dispatcher.tick()
+        expect(await reportedSlot(h, leaf)).toEqual({ state: 'held' })
+        expect(await slotWait(h, leaf)).toBeUndefined()
+        expect(await buildFor(h, 'T-next')).toBeUndefined()
+      }
+      await held()
+      // The runner dies with the siblings unfinished: the relaunch is a
+      // holding launch, recorded once.
+      await executionEnded(h, leaf, 'i1')
+      await h.store.releaseLease(leaf, `runner-${leaf}`)
+      h.clock.advance(60_000)
+      await held()
+      expect(h.launches).toEqual([leaf])
+      expect(await admissions(h, leaf)).toBe(1)
+      await executionStarted(h, leaf, 'i2')
+      for (const step of ['unit', 'docs'])
+        await h.store.append(leaf, {
+          actor: KERNEL,
+          type: 'verify.completed',
+          payload: { step, attempt: 1, pass: true },
+        })
+      await held()
+      await answerQuestion(h, leaf)
+      await held()
+      expect(await admissions(h, leaf)).toBe(1)
+      // Answered while carried, it was never released: its next launch is a
+      // holding one, recorded once like every real launch.
+      await executionEnded(h, leaf, 'i2')
+      await h.store.releaseLease(leaf, `runner-${leaf}`)
+      await held()
+      expect(h.launches).toEqual([leaf, leaf])
+      expect(await admissions(h, leaf)).toBe(2)
+    })
+
+    test('a restarted dispatcher re-attempting a running build records no launch', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const leaf = 'a-running'
+      await ticketed(h, leaf)
+      await h.store.claimLease(leaf, `runner-${leaf}`, 600_000)
+      await executionStarted(h, leaf, 'i1')
+      await h.dispatcher.tick({ resumeCurrent: true })
+      expect(await admissions(h, leaf)).toBe(0)
+      // So a question it stops on later releases the slot.
+      await h.store.append(leaf, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: 'esc', phase: 'implement', source: 'stall', question: 'why?' },
+      })
+      await executionEnded(h, leaf, 'i1')
+      expect(await reportedSlot(h, leaf)).toEqual({ state: 'none' })
+    })
+
+    test('an acknowledgement launch records nothing and takes no slot', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      const leaf = 'a-blocked'
+      await ticketed(h, leaf)
+      await firstRunEnded(h, leaf)
+      await h.store.append(leaf, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: 'esc', phase: 'implement', source: 'stall', question: 'why?' },
+      })
+      await h.store.append(leaf, {
+        actor: humanActor('operator'),
+        type: 'build.pause-requested',
+        payload: {},
+      })
+      h.tickets.add(readyTicket('T-next'))
+      await h.dispatcher.tick()
+      expect(h.launches).toContain(leaf)
+      expect(await admissions(h, leaf)).toBe(0)
+      expect(await buildFor(h, 'T-next')).toBeDefined()
+    })
+
+    test('a build answered while its runner works keeps idle ticks bounded (#1348)', async () => {
+      const { runnerRetainedSlotReadBudget } = await import('../testing/reduced-read-budget')
+      let calls = 0
+      const h = harness({
+        toml: `capacity = 2\n${STAGE_TOML}`,
+        onLaunch: claimOnLaunch,
+        wrapTickets: (source) => {
+          const listReady = source.listReady.bind(source)
+          source.listReady = async (...args: Parameters<typeof listReady>) => {
+            calls++
+            return listReady(...args)
+          }
+          return source
+        },
+      })
+      const leaf = 'a-retained'
+      await verifyingWithQuestion(h, leaf)
+      await answerQuestion(h, leaf)
+      await busyBuild(h, 'b-busy')
+      await runnerRetainedSlotReadBudget({
+        store: h.store as MemoryBuildStore,
+        slug: leaf,
+        tick: () => h.dispatcher.tick(),
+        listed: () => calls,
+        launched: () => h.launches.length,
+        advance: () => h.clock.advance(5_000),
+        advanceDue: () => h.clock.advance(60_000),
+        held: async () => (await reportedSlot(h, leaf))?.state === 'held',
+      })
+      expect(await admissions(h, leaf)).toBe(0)
+    }, 120_000)
 
     // Five tiers: manual starts, urgent parked work, urgent claims (urgent
     // starts first), normal parked work, normal claims (normal starts first).
@@ -18240,6 +18486,8 @@ describe('dispatcher — ticket waits', () => {
         reclaimedBy: { instance: 'old', resumedFromSeq: 0 },
       },
     })
+    // Its runner stops on the declaration.
+    await firstRunEnded(h, WAITER)
   }
 
   const waitEvents = async (h: Harness) =>

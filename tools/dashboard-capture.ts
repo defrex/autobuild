@@ -1300,6 +1300,17 @@ async function prepareFullCapacity(harness: E2eHarness): Promise<void> {
       type: 'runner.attached',
       payload: { instance: slug, host: 'capture' },
     })
+    // Its first runner ran and stopped, so a question waits on a human alone.
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.started',
+      payload: { provider: 'local', workspaceRef: slug, instance: slug },
+    })
+    await harness.store.append(slug, {
+      actor: DISPATCHER,
+      type: 'execution.ended',
+      payload: { instance: slug, workspaceRef: slug, outcome: 'completed' },
+    })
     if (slug === 'paused-child')
       await harness.store.append(slug, { actor: DISPATCHER, type: 'build.paused', payload: {} })
     if (slug === 'blocked-child' || slug === 'answered-leaf')

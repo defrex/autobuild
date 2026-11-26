@@ -105,9 +105,9 @@ with no runner yet. Until the node holds its slot, intake reserves one
 slot for it, and the dispatcher checks its admission every tick regardless of
 idle node polling, so a slot freed in any tick goes to the node, not to a new
 normal claim. A node's admission counts every build that holds a slot, as every
-admission does. Blocked and paused descendants hold none, so they never stand
-between a node and the slot it needs to unblock them, and no node uses a
-descendant's slot. Provisioning reserves node occupancy before the runner
+admission does. Paused descendants, and blocked ones with nothing still working
+on them, hold none, so they never stand between a node and the slot it needs
+to unblock them, and no node uses a descendant's slot. Provisioning reserves node occupancy before the runner
 starts. Status and both dashboards report occupancy against configured
 capacity, and each node waiting for a slot ahead of normal ticket claims,
 marking urgent ones. Status also reports every build's slot state (`slot`,
