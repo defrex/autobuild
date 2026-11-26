@@ -10,6 +10,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   writeFile,
   chmod,
@@ -17,6 +18,7 @@ import {
 } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import { packageDistribution, RUNTIME_ARCHIVE_GZIP_LEVEL } from '../distribution-packaging'
+import { settleInOrder, withSpeculation } from './bounded-io'
 import {
   copyDependencies,
   copySnapshotTree,
@@ -307,11 +309,16 @@ export async function validateRuntime(runtime: CachedRuntime): Promise<void> {
     throw new Error(`corrupt guest archive: ${runtime.root}`)
 }
 
-async function validateRuntimeImports(root: string, checkout: string): Promise<void> {
+async function validateRuntimeImports(
+  root: string,
+  checkout: string,
+  signal?: AbortSignal,
+): Promise<void> {
   const probe = Bun.spawn(runtimeSpawnArguments(root, join(root, 'bin/ab.ts'), ['--version']), {
     cwd: checkout,
     stdout: 'pipe',
     stderr: 'pipe',
+    signal,
   })
   const [code, stderr] = await Promise.all([
     probe.exited,
@@ -346,6 +353,120 @@ function fetchGuestArchive(
   return pending
 }
 
+/** Verifies the content-addressed dependency layer for `graph`, building and
+ * publishing it under the cache lock when absent. Returns its path. */
+async function acquireLayer(
+  cache: string,
+  stage: string,
+  graph: Awaited<ReturnType<typeof scanDependencies>>,
+): Promise<string> {
+  const layers = join(cache, 'layers')
+  await mkdir(layers, { recursive: true })
+  const layer = join(layers, graph.fingerprint)
+  const layerStage = join(stage, 'layer')
+  try {
+    const expected = await readFile(join(layer, 'digest'), 'utf8')
+    if ((await readFile(join(layer, 'distribution', 'tsconfig.json'), 'utf8')) !== RUNTIME_CONFIG)
+      throw new Error(`corrupt dependency compiler boundary: ${layer}`)
+    if ((await treeDigest(join(layer, 'distribution'))) !== expected)
+      throw new Error(`corrupt dependency layer: ${layer}`)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
+    if (existsSync(layer)) throw new Error(`corrupt dependency layer: ${layer}`, { cause: error })
+    await mkdir(join(layerStage, 'distribution'), { recursive: true })
+    await copyDependencies(graph, join(layerStage, 'distribution'))
+    await writeFile(join(layerStage, 'distribution', 'tsconfig.json'), RUNTIME_CONFIG)
+    await writeFile(join(layerStage, 'digest'), await treeDigest(join(layerStage, 'distribution')))
+    withCacheLock(cache, () => {
+      if (!existsSync(layer)) renameSync(layerStage, layer)
+    })
+  }
+  await rm(layerStage, { recursive: true, force: true })
+  return layer
+}
+
+type PreparedArchive =
+  | { kind: 'reuse'; id: string; reusable: CachedRuntime }
+  | {
+      kind: 'fresh'
+      id: string
+      destination: string
+      digest: string
+      archive: Uint8Array
+      archiveDigest: string
+    }
+
+/** Round-trips the distribution archive: extracts it, checks its compiler
+ * boundary, entries and configs, joins a copy of the snapshot's dependencies
+ * and runs a real import probe against the result. */
+async function verifyArchive(
+  root: string,
+  stage: string,
+  checkout: string,
+  takeArchive: () => Promise<Uint8Array>,
+  signal: AbortSignal,
+): Promise<{ archive: Uint8Array; archiveDigest: string }> {
+  const extracted = join(stage, 'archive-check')
+  const modules = join(stage, 'archive-modules')
+  const [verified] = await settleInOrder([
+    (async () => {
+      const archive = await takeArchive()
+      signal.throwIfAborted()
+      const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
+      await mkdir(extracted)
+      const archiveFile = join(stage, 'distribution.tgz')
+      await writeFile(archiveFile, archive)
+      const unpack = Bun.spawn(
+        ['tar', '-xzf', archiveFile, '--strip-components=1', '-C', extracted],
+        { stdout: 'ignore', stderr: 'pipe', signal },
+      )
+      const unpackError = await new Response(unpack.stderr).text()
+      if (
+        (await unpack.exited) !== 0 ||
+        (await readFile(join(extracted, 'tsconfig.json'), 'utf8')) !== RUNTIME_CONFIG
+      )
+        throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
+      await validateEntries(extracted)
+      await validateCoreConfigs(extracted)
+      return { archive, archiveDigest }
+    })(),
+    copyTreeVerbatim(join(root, 'node_modules'), modules),
+  ])
+  signal.throwIfAborted()
+  // Archived dependencies would shadow the snapshot's verified copy.
+  if (existsSync(join(extracted, 'node_modules')))
+    throw new Error('runtime archive must not contain node_modules')
+  await rename(modules, join(extracted, 'node_modules'))
+  await validateRuntimeImports(extracted, checkout, signal)
+  await rm(extracted, { recursive: true })
+  return verified
+}
+
+/** Digests the completed snapshot and reuses a matching runtime, or else
+ * requires the archive round trip. That round trip runs speculatively beside
+ * the digest, is aborted on reuse, and is awaited before this settles. */
+async function prepareArchive(
+  root: string,
+  stage: string,
+  cache: string,
+  checkout: string,
+  guest: { provenance: 'source' | 'registry' },
+  takeArchive: () => Promise<Uint8Array>,
+): Promise<PreparedArchive> {
+  return withSpeculation(
+    (signal) => verifyArchive(root, stage, checkout, takeArchive, signal),
+    async (takeVerified): Promise<PreparedArchive> => {
+      const digest = await treeDigest(root)
+      const manifest = await readManifest(root)
+      const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${guest.provenance}-guest1-${digest}`
+      const destination = join(cache, id)
+      const reusable = await cachedRuntime(join(destination, 'distribution'))
+      if (reusable) return { kind: 'reuse', id, reusable }
+      return { kind: 'fresh', id, destination, digest, ...(await takeVerified()) }
+    },
+  )
+}
+
 export async function prepareRuntime(
   source: string,
   checkout: string,
@@ -360,85 +481,70 @@ export async function prepareRuntime(
   await mkdir(cache, { recursive: true })
   const stage = await mkdtemp(join(cache, '.preparing-'))
   const root = join(stage, 'distribution')
+  const check = join(stage, 'source-check')
+  const recheckSource = async (codeDigest: string): Promise<void> => {
+    await stageCode(source, check)
+    if ((await treeDigest(check)) !== codeDigest)
+      throw new Error('Autobuild source changed while preparing runtime; retry dispatch')
+    await rm(check, { recursive: true })
+  }
   try {
-    const graph = await scanDependencies(source)
-    await stageCode(source, root)
-    const codeDigest = await treeDigest(root)
-    const check = join(stage, 'source-check')
-    await stageCode(source, check)
-    if ((await treeDigest(check)) !== codeDigest)
-      throw new Error('Autobuild source changed while preparing runtime; retry dispatch')
-    await rm(check, { recursive: true })
-    const layers = join(cache, 'layers')
-    await mkdir(layers, { recursive: true })
-    const layer = join(layers, graph.fingerprint)
-    const layerStage = join(stage, 'layer')
-    try {
-      const expected = await readFile(join(layer, 'digest'), 'utf8')
-      if ((await readFile(join(layer, 'distribution', 'tsconfig.json'), 'utf8')) !== RUNTIME_CONFIG)
-        throw new Error(`corrupt dependency compiler boundary: ${layer}`)
-      if ((await treeDigest(join(layer, 'distribution'))) !== expected)
-        throw new Error(`corrupt dependency layer: ${layer}`)
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error
-      if (existsSync(layer)) throw new Error(`corrupt dependency layer: ${layer}`, { cause: error })
-      await mkdir(join(layerStage, 'distribution'), { recursive: true })
-      await copyDependencies(graph, join(layerStage, 'distribution'))
-      await writeFile(join(layerStage, 'distribution', 'tsconfig.json'), RUNTIME_CONFIG)
-      await writeFile(
-        join(layerStage, 'digest'),
-        await treeDigest(join(layerStage, 'distribution')),
-      )
-      withCacheLock(cache, () => {
-        if (!existsSync(layer)) renameSync(layerStage, layer)
-      })
-    }
-    await rm(layerStage, { recursive: true, force: true })
-    await copyTreeVerbatim(join(layer, 'distribution', 'node_modules'), join(root, 'node_modules'))
-    await validateEntries(root)
-    await validateCoreConfigs(root)
-    if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
-      throw new Error('installed dependencies changed while preparing runtime; retry dispatch')
-    await stageCode(source, check)
-    if ((await treeDigest(check)) !== codeDigest)
-      throw new Error('Autobuild source changed while preparing runtime; retry dispatch')
-    await rm(check, { recursive: true })
-    // Real Bun import graph validation uses the same pre-entry compiler boundary
-    // as every generation and runner. No automatic installer can run here.
-    await validateRuntimeImports(root, checkout)
-    const digest = await treeDigest(root)
-    const manifest = await readManifest(root)
-    const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${guest.provenance}-guest1-${digest}`
-    const destination = join(cache, id)
-    const reusable = await cachedRuntime(join(destination, 'distribution'))
-    if (reusable) {
-      reservePreparedRuntime(cache, id)
-      await validateRuntime(reusable)
-      return reusable
-    }
-    const archive = await packageDistribution(root, undefined, undefined, undefined, {
-      gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL,
-    })
-    const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
-    const extracted = join(stage, 'archive-check')
-    await mkdir(extracted)
-    const archiveFile = join(stage, 'distribution.tgz')
-    await writeFile(archiveFile, archive)
-    const unpack = Bun.spawn(
-      ['tar', '-xzf', archiveFile, '--strip-components=1', '-C', extracted],
-      { stdout: 'ignore', stderr: 'pipe' },
+    const scanned = scanDependencies(source)
+    const staged = stageCode(source, root)
+    // Every branch is joined before cleanup or publication, and each join
+    // reports failures in the order the stages once ran serially. Packaging
+    // reads only the staged code, so it starts as soon as that is complete and
+    // is awaited, or aborted and awaited, before anything else proceeds.
+    const { graph, prepared } = await withSpeculation(
+      async (signal) => {
+        await staged
+        signal.throwIfAborted()
+        return packageDistribution(root, undefined, signal, undefined, {
+          gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL,
+        })
+      },
+      async (takeArchive) => {
+        const [graph, codeDigest, layer] = await settleInOrder([
+          scanned,
+          (async () => {
+            await staged
+            const digest = await treeDigest(root)
+            await recheckSource(digest)
+            return digest
+          })(),
+          scanned.then((graph) => acquireLayer(cache, stage, graph)),
+        ])
+        await copyTreeVerbatim(
+          join(layer, 'distribution', 'node_modules'),
+          join(root, 'node_modules'),
+        )
+        await validateEntries(root)
+        await validateCoreConfigs(root)
+        // The snapshot is complete. These branches only read it or the source,
+        // and nothing is reserved, returned or published until all of them pass.
+        const [, , , prepared] = await settleInOrder([
+          (async () => {
+            if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
+              throw new Error(
+                'installed dependencies changed while preparing runtime; retry dispatch',
+              )
+          })(),
+          recheckSource(codeDigest),
+          // Real Bun import graph validation uses the same pre-entry compiler
+          // boundary as every generation and runner. No automatic installer
+          // can run here.
+          validateRuntimeImports(root, checkout),
+          prepareArchive(root, stage, cache, checkout, guest, takeArchive),
+        ])
+        return { graph, prepared }
+      },
     )
-    const unpackError = await new Response(unpack.stderr).text()
-    if (
-      (await unpack.exited) !== 0 ||
-      (await readFile(join(extracted, 'tsconfig.json'), 'utf8')) !== RUNTIME_CONFIG
-    )
-      throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
-    await validateEntries(extracted)
-    await validateCoreConfigs(extracted)
-    await copyTreeVerbatim(join(root, 'node_modules'), join(extracted, 'node_modules'))
-    await validateRuntimeImports(extracted, checkout)
-    await rm(extracted, { recursive: true })
+    if (prepared.kind === 'reuse') {
+      reservePreparedRuntime(cache, prepared.id)
+      await validateRuntime(prepared.reusable)
+      return prepared.reusable
+    }
+    const { id, destination, digest, archive, archiveDigest } = prepared
     await writeFile(join(stage, 'distribution.tgz'), archive)
     const guestArchive: NonNullable<CachedRuntime['guestArchive']> =
       guest.provenance === 'registry'
