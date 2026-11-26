@@ -962,7 +962,7 @@ describe('projectBuild: effective status (a DISPLAY rule, not a lifecycle one)',
     expect(decideNext(blockedAndPaused, CONFIG)).toEqual({ kind: 'wait', reason: 'paused' })
   })
 
-  test('pending commands project PAUSING and RESUMING, with cancellation returning to RUNNING', () => {
+  test('pending commands project pausing and resuming, with cancellation returning to running', () => {
     const pausingWrites = [
       ...prelude(),
       ev('plan.started', { round: 1 }),
@@ -2240,7 +2240,7 @@ describe('durations: accumulation and scope', () => {
     expect(timing?.runningSince).toBe(tsMsOf(log, 5)) // the plan.started seq
   })
 
-  test('PAUSING keeps its open timer live while RESUMING stays frozen', () => {
+  test('a pausing build keeps its open timer live while a resuming one stays frozen', () => {
     const pausing = toLog([
       ...prelude(),
       ev('plan.started', { round: 1 }),

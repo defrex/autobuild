@@ -440,7 +440,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       frame.id.startsWith('harvest-escalated-') ||
       frame.id.startsWith('harvest-failed-')
     ) {
-      expect(frame.model.harvest?.status).toBe(frame.id.split('-')[1])
+      expect(frame.model.harvest?.status as string | undefined).toBe(frame.id.split('-')[1])
     } else if (frame.id.startsWith('harvest-suspended-')) {
       expect(frame.text).toContain('SUSPENDED')
       expect(frame.text).not.toContain('synthesize[>]')

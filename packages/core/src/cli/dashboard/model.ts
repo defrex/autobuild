@@ -927,7 +927,7 @@ export function projectBuildFromFacts(
   // away, so they are derived here (display-only, at the one call site that
   // already has the log in hand). A running build keeps its open interval live
   // (the renderer ticks it against `now`); a paused build freezes every open
-  // interval at its acknowledgement (including while RESUMING), while a
+  // interval at its acknowledgement (including while a resume is pending), while a
   // blocked build freezes at the latest non-distance durable event. Timers do
   // not advance behind either gate (AC 10). Each step scopes by the SAME seq boundary its state uses, so
   // durations and states restart in lockstep (AC 12).
