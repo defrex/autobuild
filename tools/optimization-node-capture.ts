@@ -7,6 +7,7 @@ import {
   OptimizationLogBuilder,
 } from '../packages/core/src/kernel/generators/optimization-log'
 import { reduceBuild } from '../packages/core/src/kernel/reducer'
+import { slotState } from '../packages/core/src/kernel/dispatch-capacity'
 import { projectBuild, type DashboardModel } from '../packages/core/src/cli/dashboard/model'
 
 export const OPTIMIZATION_NODE_SLUG = 'optimize-search-latency'
@@ -71,9 +72,19 @@ export function optimizationNodeCapture(model: DashboardModel, config: Config): 
     createdAt: events[0]!.ts,
     updatedAt: events.at(-1)!.ts,
   }
-  const node = projectBuild(record, reduceBuild(events), config, events)
-  if (node?.objectiveRow === undefined) {
+  const state = reduceBuild(events)
+  const projected = projectBuild(record, state, config, events)
+  if (projected?.objectiveRow === undefined) {
     throw new Error(`dashboard capture: ${OPTIMIZATION_NODE_SLUG} projected no objective row`)
   }
-  return { ...model, builds: [node, ...model.builds] }
+  const slot = slotState({ record, state, workspace: false }, new Date(record.updatedAt))
+  const node = { ...projected, ...(slot ? { slot } : {}) }
+  return {
+    ...model,
+    active: {
+      ...model.active,
+      current: model.active.current + (slot?.state === 'held' ? 1 : 0),
+    },
+    builds: [node, ...model.builds],
+  }
 }

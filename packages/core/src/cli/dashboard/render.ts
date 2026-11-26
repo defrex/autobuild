@@ -45,6 +45,7 @@ import { displayText, layoutComposer, packAtomic, wrapDisplay } from './composer
 import { cellWidth, graphemes, padEndCells } from './cells'
 import {
   HARVEST_TITLE,
+  buildRowStatus,
   projectHarvestRowText,
   projectHeaderText,
   projectProgress,
@@ -52,14 +53,8 @@ import {
   reviewRoundCeilingText,
   type RowAttention,
 } from './row-text'
-import {
-  PROGRESS_VERIFIED,
-  statusText,
-  stepLine,
-  stepTone,
-  viewerLabel,
-  type DashboardTone,
-} from './vocabulary'
+import { RESET, TONE_COLOR, paint, type ColorName } from './tone-ansi'
+import { PROGRESS_VERIFIED, harvestStatusText, stepLine, stepTone, viewerLabel } from './vocabulary'
 
 export { formatDuration } from './vocabulary'
 
@@ -107,34 +102,9 @@ export type DashboardRendererResolver = () => DashboardRenderer
 
 // ── ANSI ─────────────────────────────────────────────────────────────────────
 
-const ESC = '\x1b['
-const RESET = `${ESC}0m`
 /** Closes an OSC 8 hyperlink. `RESET` does NOT: it is an SGR reset, and the
  * two families are independent — only this ends the link. */
 const LINK_OFF = '\x1b]8;;\x07'
-const CODES = {
-  dim: 2,
-  red: 31,
-  green: 32,
-  yellow: 33,
-  blue: 34,
-  cyan: 36,
-  bold: 1,
-} as const
-type ColorName = keyof typeof CODES
-
-/** The terminal's colour for each shared tone. */
-const TONE_COLOR: Record<DashboardTone, ColorName> = {
-  ok: 'green',
-  live: 'cyan',
-  held: 'yellow',
-  alert: 'red',
-  pending: 'dim',
-}
-
-function paint(text: string, color: ColorName, on: boolean): string {
-  return on ? `${ESC}${CODES[color]}m${text}${RESET}` : text
-}
 
 /** OSC 8: the escape common terminals turn into a real hyperlink. In plain
  * mode we emit the bare URL, which those same terminals linkify on sight —
@@ -356,7 +326,12 @@ function renderBuild(
   if (text.pr !== undefined) rightTokens.push(link(text.pr.url, text.pr.text, color))
   for (const flag of text.flags)
     rightTokens.push(paint(`(${flag.term})`, TONE_COLOR[flag.tone], color))
-  rightTokens.push(paint(text.status.word.padStart(widths.status), statusColor, color))
+  // The status note (`(merge decision)`) hugs the word it explains; the
+  // padding goes ahead of both so the word still ends at the right edge.
+  const statusPad = ' '.repeat(Math.max(0, widths.status - cellWidth(text.status.word)))
+  const statusNote =
+    text.status.note !== undefined ? `${paint(`(${text.status.note})`, 'dim', color)} ` : ''
+  rightTokens.push(`${statusPad}${statusNote}${paint(text.status.word, statusColor, color)}`)
   const rightStr = rightTokens.join('  ')
 
   // The slug is the sole flexible segment; narrow frames truncate it before
@@ -497,8 +472,8 @@ function frameWidths(builds: DashboardBuild[], harvest: DashboardHarvest | undef
     ),
     status: Math.max(
       0,
-      ...builds.map((b) => cellWidth(statusText(b.status).word)),
-      ...(harvest !== undefined ? [cellWidth(statusText(harvest.status).word)] : []),
+      ...builds.map((b) => cellWidth(buildRowStatus(b).word)),
+      ...(harvest !== undefined ? [cellWidth(harvestStatusText(harvest.status).word)] : []),
     ),
   }
 }
@@ -1001,11 +976,13 @@ function renderDetail(model: DashboardModel, opts: RenderOpts): string[] {
   const { color, width, height } = opts
   const draining = build.draining ? ` ${paint('(draining)', 'yellow', color)}` : ''
   const paused = build.alsoPaused ? ' (also paused)' : ''
+  const status = buildRowStatus(build)
+  const statusNote = status.note !== undefined ? ` (${status.note})` : ''
   const notice = upgradeNoticeLine(model, color, width)
   const top = [
     truncate(`${paint('Build', 'bold', color)}  ${displayText(build.slug)}`, width),
     truncate(
-      `  status ${paint(statusText(build.status).word, TONE_COLOR[statusText(build.status).tone], color)}${paused}${draining}`,
+      `  status ${paint(`${status.word}${statusNote}`, TONE_COLOR[status.tone], color)}${paused}${draining}`,
       width,
     ),
     ...standbyLine(model, color, width),

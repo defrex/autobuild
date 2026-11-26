@@ -93,7 +93,7 @@ test('an open wait names its tickets and how to end it early', async () => {
   const line = lines.find((entry) => entry.startsWith('  waiting on: '))
   expect(line).toContain('B, C — needs B (since ')
   expect(line).toContain('end early with ab answer waits)')
-  expect(lines).toContain('  status:   waiting')
+  expect(lines).toContain('  status:   WAITING (on B, C)')
 })
 
 test('ab builds lists a lone open wait as waiting on its tickets; JSON keeps blocked', async () => {
@@ -105,7 +105,7 @@ test('ab builds lists a lone open wait as waiting on its tickets; JSON keeps blo
     tickets: ['B', 'C'],
   })
   const row = rows[1]!.split(/\s{2,}/)
-  expect(row[1]).toBe('waiting')
+  expect(row[1]).toBe('WAITING (on B, C)')
   // A build waiting on the outside world holds no slot and requests none.
   expect(row[2]).toBe('none')
   expect(row[3]).toEndWith(', waiting on B, C')
@@ -115,9 +115,9 @@ test('another open escalation keeps an open wait blocked', async () => {
   const { shown, rows, lines } = await waiting('blocked')
   expect(shown.waitOnly).toBeUndefined()
   expect(shown.wait).toMatchObject({ state: 'waiting' })
-  expect(rows[1]!.split(/\s{2,}/)[1]).toBe('blocked')
+  expect(rows[1]!.split(/\s{2,}/)[1]).toBe('BLOCKED')
   expect(rows[1]).toContain('waiting on B, C')
-  expect(lines).toContain('  status:   blocked')
+  expect(lines).toContain('  status:   BLOCKED')
 })
 
 test('an ended wait waits for a slot to resume', async () => {

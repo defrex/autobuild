@@ -36,6 +36,7 @@ import { type FlowBlock, Masked, Reserve, StableFlow } from '../components/motio
 import { installClsProbe } from '../cls-probe'
 import { chartHue, color, space, type } from '../tokens'
 import { fixtureBuilds, fixtureStepStats, NOW } from './fixtures'
+import { BUILD_STATUS_TONE, HARVEST_STATUS_TONE } from '../../../core/src/cli/dashboard/vocabulary'
 
 /** A step note as the projection writes it: `(4m12s)`. */
 const n = (ms: number) => `(${formatDuration(ms)})`
@@ -277,11 +278,19 @@ function Display() {
     <Grounds>
       <Specimen label="State words">
         <div data-catalog="row">
-          <StateWord tone="live">RUNNING</StateWord>
+          {Object.entries(BUILD_STATUS_TONE).map(([word, tone]) => (
+            <StateWord key={word} tone={tone}>
+              {word}
+            </StateWord>
+          ))}
+        </div>
+        <div data-catalog="row">
+          {Object.entries(HARVEST_STATUS_TONE).map(([word, tone]) => (
+            <StateWord key={word} tone={tone}>
+              {word}
+            </StateWord>
+          ))}
           <StateWord tone="ok">MERGED</StateWord>
-          <StateWord tone="held">WAITING</StateWord>
-          <StateWord tone="alert">BLOCKED</StateWord>
-          <StateWord tone="pending">QUEUED</StateWord>
         </div>
       </Specimen>
       <Specimen label="Steps">
@@ -382,7 +391,7 @@ const rows: BuildRowModel[] = [
     title: 'Allowlist-backed local configuration overrides',
     slug: 'local-config-overrides',
     status: 'RUNNING',
-    tone: 'live',
+    tone: 'ok',
     href: '#build',
     meta: 'round 2',
     steps: [
@@ -430,13 +439,11 @@ const rows: BuildRowModel[] = [
     ticket: '#1093',
     title: 'Record forge rate limits per credential',
     slug: 'record-forge-rate-limits',
-    status: 'SUSPENDED',
+    status: 'WAITING',
     tone: 'held',
     href: '#build',
-    flags: [
-      { term: 'held', tone: 'held' },
-      { term: 'paused', tone: 'held' },
-    ],
+    flags: [{ term: 'paused', tone: 'held' }],
+    note: 'on #1084',
     meta: 'main +2 · merge off',
     lines: [
       {
@@ -493,7 +500,7 @@ function Composites() {
 const cycle: Pick<BuildRowModel, 'status' | 'tone' | 'steps' | 'attention'>[] = [
   {
     status: 'RUNNING',
-    tone: 'live',
+    tone: 'ok',
     steps: [
       { name: 'plan', state: 'done', note: n(412_000) },
       { name: 'implement', state: 'current', note: n(1_302_000) },

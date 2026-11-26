@@ -13,6 +13,7 @@ import {
   NOW,
   overviewFrame,
   RUNNING_SLUG,
+  stateChangedFrame,
   WAITING_SLUG,
 } from './fixtures'
 import { parseFrameHint } from './hint'
@@ -29,6 +30,20 @@ const titles = (markup: string) =>
   [...markup.matchAll(/data-ansi="row-title"[^>]*><span>([^<]*)<\/span>/g)].map((m) => m[1])
 
 describe('overview', () => {
+  test('every fixture frame counts exactly its green rows as occupied (SPEC §14)', () => {
+    for (const frame of [
+      overviewFrame(),
+      stateChangedFrame(),
+      attentionArrivedFrame(),
+      movedFrame(),
+    ]) {
+      const o = frame.overview!
+      const green = [...o.active, ...o.queued].filter((row) => row.status.tone === 'ok').length
+      const active = o.header.counts.find((count) => count.label === 'active')!.value
+      expect(Number(active.split('/')[0])).toBe(green)
+    }
+  })
+
   test('rows land in their sections in projection order, title first, each linked', () => {
     const frame = overviewFrame()
     const o = frame.overview!
