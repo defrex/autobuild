@@ -858,7 +858,9 @@ outside world (`leafOutsideWait`: blocked, an acknowledged pause, a pending
 `revise-spec`, or a finished pipeline with no epilogue work due). Runner
 liveness never enters, so a leftover runner never takes a slot back. Every
 other leaf without a slot requests one, `resume` unless an epilogue reason
-names another. Node admission (`nodeHasCapacity`) counts every slot holder;
+names another. `leafAdmission` neither gates nor admits a leaf that holds its
+slot, still waits on the outside world, or acknowledges a pause or abort. Node
+admission (`nodeHasCapacity`) counts every slot holder;
 there is no descendant borrowing.
 Reopening a settled leaf (SPEC §15.7) spans the same seams. The shared
 `cli/build-control.ts` control appends the human `build.reopened` and, for a
