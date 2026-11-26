@@ -278,6 +278,36 @@ test('older launcher accepts runtime-owned handoff extensions in legacy, full an
   }
 })
 
+test('the advisory preparing correlation survives legacy, full and unchanged replies', async () => {
+  const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
+  const projection = { version: 1, handoff: null, takeover: false, preparing: 'detected' }
+  const guards = { handoff: null, rollbackRecorded: false, failedRoot: null }
+  const client = conditionalUpgradeClient()
+  expect<unknown>(await client('reader', async () => projection)).toEqual(projection)
+  const full = (projection: unknown) => async () => ({
+    conditionalVersion: 1,
+    identity: 'reader',
+    kind: 'full',
+    position: '1',
+    guards,
+    projection,
+  })
+  expect((await client('reader', full(projection))).preparing).toBe('detected')
+  const unchanged = await client('reader', async () => ({
+    conditionalVersion: 1,
+    identity: 'reader',
+    kind: 'unchanged',
+    position: '1',
+    handoff: null,
+    rollbackRetained: false,
+  }))
+  expect(unchanged.preparing).toBe('detected')
+  for (const preparing of ['', 7])
+    await expect(client('reader', full({ ...projection, preparing }))).rejects.toThrow(
+      'invalid full upgrade response',
+    )
+})
+
 test('reader errors stay visible while predecessor conditional state remains scoped to the active query', async () => {
   const { conditionalUpgradeClient } = await import('./dispatch-launch-contract')
   const active = conditionalUpgradeClient(),

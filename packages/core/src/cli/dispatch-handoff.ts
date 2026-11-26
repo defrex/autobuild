@@ -177,6 +177,17 @@ export async function readUpgradeProjection(
           : undefined
       const rollbackRecorded =
         !!launch.rollback && upgrades.rollbackIds.includes(launch.rollback.correlation)
+      // An outstanding preparation only paces launcher observation.
+      const detected = state?.detected?.payload
+      const preparing =
+        detected &&
+        detected.lineage === launch.lineage &&
+        state.prepared?.payload.correlation !== detected.correlation &&
+        state.failure?.payload.correlation !== detected.correlation &&
+        !state.request &&
+        !state.handoff
+          ? detected.correlation
+          : undefined
       guards = {
         handoff: facts ? selectHandoff(launch, state, facts, true) : null,
         rollbackRecorded,
@@ -197,6 +208,7 @@ export async function readUpgradeProjection(
         accepted: !!state?.handoff,
         successor: state?.request?.payload.successor,
         released: !!state?.released,
+        ...(preparing ? { preparing } : {}),
       }
     }
     return condition
