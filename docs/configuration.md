@@ -4725,12 +4725,12 @@ action. Check the gates in this order:
 5. **Dependencies:** every `blockedBy` ticket must exist and be complete in the
    same source. This includes harvest proposals filed directly into the ready
    state. Plain dispatch output reports unresolved ids and cycles.
-6. **Capacity:** every unfinished build for this repository—including paused
-   builds and builds blocked on a question—uses a slot. A build that has
-   finished its pipeline and waits for a merge decision holds none, and neither
-   does a build waiting on other tickets. One that must re-verify or reconcile,
-   or whose ticket wait ended, is admitted ahead of normal claims and reserves a
-   slot while it waits; urgent work goes first (see
+6. **Capacity:** a build holds a slot from admission while Autobuild owes its
+   next move, runner or not. Paused builds, builds blocked on a question, builds
+   waiting for a merge decision or merge gates, and builds waiting on other
+   tickets hold none. An answered or resumed build, one whose ticket wait ended,
+   and one that must re-verify or reconcile reserve a slot ahead of normal
+   claims until admitted; urgent work goes first (see
    [slot admission order](dispatcher.md#slot-admission-order)). Inspect `ab repository status`, `ab builds --queued` and
    `ab build status <slug>` rather than looking only for a live process.
 7. **Duplicate work:** a ready ticket already represented by an active build is
