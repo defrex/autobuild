@@ -1,6 +1,19 @@
-import { cp, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from 'node:fs/promises'
+import { constants } from 'node:fs'
+import {
+  chmod,
+  copyFile,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  rm,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { dirname, isAbsolute, join, relative, sep } from 'node:path'
+import { drainStack, forEachBounded, TREE_IO_CONCURRENCY } from './cli/bounded-io'
 
 async function spawnExec(cmd: string[], options: { cwd: string; signal?: AbortSignal }) {
   const child = Bun.spawn(cmd, {
@@ -76,6 +89,106 @@ export const SCRATCH_ARCHIVE_GZIP_LEVEL = 0
  * digest is taken from the bytes it produces. */
 export const RUNTIME_ARCHIVE_GZIP_LEVEL = 2
 
+/** The filesystem operations {@link stageDistributionFiles} uses, with the
+ * `node:fs/promises` signatures it calls them with. */
+export interface StagingFilesystem {
+  lstat(path: string): Promise<{
+    mode: number
+    isDirectory(): boolean
+    isFile(): boolean
+  }>
+  readdir(path: string): Promise<string[]>
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<unknown>
+  copyFile(source: string, target: string, mode: number): Promise<void>
+  chmod(path: string, mode: number): Promise<void>
+  cp(source: string, target: string, options: typeof stagingCopyOptions): Promise<void>
+}
+
+const nodeStagingFilesystem: StagingFilesystem = {
+  lstat,
+  readdir: (path) => readdir(path),
+  mkdir,
+  copyFile,
+  chmod,
+  cp,
+}
+
+const stagingCopyOptions = { recursive: true, errorOnExist: true, force: false } as const
+
+function entriesOverlap(staging: string, entries: readonly string[]): boolean {
+  const normalized = entries.map((entry) => relative(staging, join(staging, entry)))
+  if (normalized.some((path) => path === '' || path.startsWith('..') || isAbsolute(path)))
+    return true
+  for (const a of normalized)
+    for (const b of normalized)
+      if (a !== b ? b.startsWith(a + sep) : normalized.indexOf(a) !== normalized.lastIndexOf(a))
+        return true
+  return false
+}
+
+/** Copies each positive `files` entry of `root` to the same relative path under
+ * a fresh `staging` directory, with the result `cp(source, target, { recursive:
+ * true, errorOnExist: true, force: false })` per entry produces.
+ *
+ * Disjoint entries are walked by one bounded pool: directory children are
+ * queued as plain items, so at most `limit` filesystem operations are in flight
+ * across and within entries however many files they hold. The walker creates
+ * directories and copies regular files itself, giving each file its source
+ * mode (`& 0o7777`) and, after every copy has finished, each directory its
+ * source mode deepest level first so a read-only directory is restricted only
+ * once its descendants exist. Every other entry kind (symlinks, FIFOs,
+ * sockets, devices) is handed to `cp` with the same options, keeping its
+ * semantics exactly. Overlapping, duplicate, empty or escaping entries keep
+ * the serial per-entry `cp` loop in manifest order, so merges and overlap
+ * errors behave as before.
+ *
+ * After the first failure no operation starts, and the promise settles only
+ * once every started operation has settled, so the caller can remove staging
+ * without racing an outstanding write. */
+export async function stageDistributionFiles(
+  root: string,
+  staging: string,
+  entries: readonly string[],
+  fs: StagingFilesystem = nodeStagingFilesystem,
+  limit = TREE_IO_CONCURRENCY,
+): Promise<void> {
+  if (entriesOverlap(staging, entries)) {
+    for (const entry of entries) {
+      const target = join(staging, entry)
+      await fs.mkdir(dirname(target), { recursive: true })
+      await fs.cp(join(root, entry), target, stagingCopyOptions)
+    }
+    return
+  }
+  type Item = { source: string; target: string; depth: number }
+  const directories: Array<Array<{ target: string; mode: number }>> = []
+  await drainStack<Item>(
+    entries.map((entry) => ({ source: join(root, entry), target: join(staging, entry), depth: 0 })),
+    limit,
+    async ({ source, target, depth }, push) => {
+      const status = await fs.lstat(source)
+      if (depth === 0) await fs.mkdir(dirname(target), { recursive: true })
+      if (status.isDirectory()) {
+        await fs.mkdir(target)
+        const level = directories[depth] ?? []
+        directories[depth] = level
+        level.push({ target, mode: status.mode & 0o7777 })
+        for (const name of await fs.readdir(source))
+          push({ source: join(source, name), target: join(target, name), depth: depth + 1 })
+      } else if (status.isFile()) {
+        await fs.copyFile(source, target, constants.COPYFILE_EXCL)
+        await fs.chmod(target, status.mode & 0o7777)
+      } else {
+        await fs.cp(source, target, stagingCopyOptions)
+      }
+    },
+  )
+  for (let depth = directories.length - 1; depth >= 0; depth--)
+    await forEachBounded(directories[depth] ?? [], limit, ({ target, mode }) =>
+      fs.chmod(target, mode),
+    )
+}
+
 /** Packs `root`'s `files` set with `bun pm pack`. `options.gzipLevel` (an
  * integer 0–9) sets the archive's deflate effort; omitted, Bun's default
  * applies and the command is unchanged. The level changes compressed bytes
@@ -110,21 +223,16 @@ export async function packageDistribution(
         'Autobuild packaging requires the root package.json to list its files as an array of paths',
       )
     }
-    for (const entry of files as string[]) {
-      // npm `files` entries may be negated globs (for example
-      // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
-      // published package). Only positive entries name a path to stage: the
-      // negations stay in the staged manifest and `bun pm pack` applies them,
-      // so the packed set still excludes those paths.
-      if (entry.startsWith('!')) continue
-      const target = join(staging, entry)
-      await mkdir(dirname(target), { recursive: true })
-      await cp(join(root, entry), target, {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-      })
-    }
+    // npm `files` entries may be negated globs (for example
+    // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
+    // published package). Only positive entries name a path to stage: the
+    // negations stay in the staged manifest and `bun pm pack` applies them,
+    // so the packed set still excludes those paths.
+    await stageDistributionFiles(
+      root,
+      staging,
+      (files as string[]).filter((entry) => !entry.startsWith('!')),
+    )
     for (const field of packedManifestOmittedFields) delete manifest[field]
     await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     await execOrThrow(
