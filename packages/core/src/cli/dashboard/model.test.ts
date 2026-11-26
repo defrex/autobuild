@@ -47,6 +47,8 @@ import {
   dashboardBuildControl,
   projectBuild,
   projectRepositoryHarvest,
+  restingStatus,
+  statusBasis,
   type DashboardBuild,
   type PipelineStep,
 } from './model'
@@ -1873,6 +1875,50 @@ describe('f_3535ef75 / merge is gated on drained work', () => {
       ]),
     )
     expect(stepFor(enabled, 'merge')?.reason).toBeUndefined()
+  })
+
+  test('status basis: runner, settled landing variants, and a blocked build with an abort pending', () => {
+    const basis = (writes: EventWrite[]) => statusBasis(reduceBuild(toLog(writes)))
+    const execution = ev('execution.started', {
+      provider: 'local',
+      workspaceRef: '/ws/auth-rate-limit',
+      instance: 'runner-1',
+    })
+    expect(basis([...prelude(), execution])?.runner).toBe(true)
+    expect(
+      basis([
+        ...prelude(),
+        execution,
+        ev('execution.ended', {
+          instance: 'runner-1',
+          workspaceRef: '/ws/auth-rate-limit',
+          outcome: 'completed',
+        }),
+      ])?.runner,
+    ).toBe(false)
+    const settledLog = toLog(throughPr)
+    const settled = [
+      ...throughPr,
+      ev('pipeline.settled', { cycle: settledLog.at(-1)!.seq }),
+      ev('landing.decided', {
+        candidate: { head: 'sha-r1', parent: 'base', cycle: '1' },
+        from: 'leaf',
+        into: { kind: 'root' },
+        labels: [],
+        mode: 'consent',
+        rule: { default: true },
+      }),
+    ]
+    expect(basis(settled)?.settled).toBe('decision')
+    expect(basis([...settled, ev('build.hold-requested', {})])?.settled).toBe('hold')
+    expect(basis([...settled, ev('build.auto-merge-requested', {})])?.settled).toBe('merging')
+    const blocked = [
+      ...prelude(),
+      ev('escalation.raised', { id: 'e1', phase: 'plan', source: 'agent', question: 'q?' }),
+      ev('build.abort-requested', {}),
+    ]
+    expect(basis(blocked)).toMatchObject({ resting: 'blocked', abort: true })
+    expect(restingStatus(reduceBuild(toLog(blocked)))).toBe('blocked')
   })
 
   test('failing forge CI at the PR head is a red row alert until it clears', () => {

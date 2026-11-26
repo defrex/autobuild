@@ -70,6 +70,22 @@ describe('projectRowText', () => {
     expect('slot' in row()).toBe(false)
   })
 
+  test('the status word and tone come from the slot, with its note', () => {
+    const settled = { resting: 'running', runner: false, settled: 'decision' } as const
+    expect(row({ slot: { state: 'none' }, statusBasis: settled }).status).toEqual({
+      status: 'running',
+      word: 'WAITING',
+      tone: 'held',
+      note: 'merge decision',
+    })
+    expect(
+      row({ slot: { state: 'requested', request: 'resume', priority: 'urgent' } }).status,
+    ).toEqual({ status: 'running', word: 'QUEUED', tone: 'live', note: 'urgent resume' })
+    const queued = row({ status: 'queued', slot: { state: 'held' } }, true)
+    expect([queued.status.word, queued.status.tone]).toEqual(['STARTING', 'ok'])
+    expect(queued.flags.map((f) => f.term)).toEqual(['held'])
+  })
+
   test('flags: held only for queued rows under a repository hold, then draining, paused', () => {
     expect(row({ status: 'queued' }, true).flags.map((f) => f.term)).toEqual(['held'])
     expect(row({}, true).flags).toEqual([])
@@ -118,9 +134,9 @@ describe('projectRowText', () => {
   test('notice prefers abort progress over dispatch, in the status tone', () => {
     expect(row({ status: 'aborting', abortProgress: 'a', dispatch: 'd' }).notice).toEqual({
       text: 'a',
-      tone: 'alert',
+      tone: 'ok',
     })
-    expect(row({ status: 'queued', dispatch: 'd' }).notice).toEqual({ text: 'd', tone: 'live' })
+    expect(row({ status: 'queued', dispatch: 'd' }).notice).toEqual({ text: 'd', tone: 'ok' })
   })
 
   test('attention lines in row order', () => {
@@ -203,13 +219,13 @@ test('harvest row text', () => {
   }
   expect(projectHarvestRowText(harvest)).toEqual({
     title: 'Harvest',
-    status: { status: 'escalated', word: 'ESCALATED', tone: 'held' },
+    status: { status: 'escalated', word: 'ESCALATED', tone: 'alert' },
     observations: '4 observations',
     steps: [],
   })
   expect(projectHarvestRowText({ ...harvest, detail: 'why' }).detail).toEqual({
     text: 'why',
-    tone: 'held',
+    tone: 'alert',
   })
 })
 
@@ -327,7 +343,7 @@ describe('projectAttention', () => {
     })
     expect(projectAttention([], harvest('running'))).toEqual([])
     expect(projectAttention([], harvest('escalated'))).toEqual([
-      { kind: 'harvest', tone: 'held', text: 'needs you' },
+      { kind: 'harvest', tone: 'alert', text: 'needs you' },
     ])
   })
 })

@@ -507,7 +507,7 @@ describe('renderDashboard: two-line header and conditional warning', () => {
       ['running', 'RUNNING', 'p pause'],
       ['pausing', 'PAUSING', 'p cancel pause'],
       ['paused', 'PAUSED', 'r resume'],
-      ['resuming', 'RESUMING', undefined],
+      ['resuming', 'QUEUED', undefined],
       ['blocked', 'BLOCKED', 'r resume'],
       ['aborting', 'ABORTING', undefined],
     ] as const
@@ -546,8 +546,35 @@ describe('renderDashboard: two-line header and conditional warning', () => {
   })
 })
 
+describe('renderDashboard: status notes', () => {
+  test('the note hugs the right-pinned word in the list, and follows it in detail', () => {
+    const waiting = build({
+      slug: 'settled-row',
+      pr: undefined,
+      slot: { state: 'none' },
+      statusBasis: { resting: 'running', runner: false, settled: 'decision' },
+    })
+    const running = build({ slug: 'running-row', pr: undefined })
+    const lines = rd(model([waiting, running]), { color: true, width: 100 })
+    const settled = lines.find((line) => stripAnsi(line).includes('settled-row'))!
+    expect(stripAnsi(settled)).toMatch(/merge off {2}\(merge decision\) WAITING$/)
+    expect(settled).toContain('\x1b[2m(merge decision)\x1b[0m \x1b[33mWAITING\x1b[0m')
+    const other = stripAnsi(lines.find((line) => stripAnsi(line).includes('running-row'))!)
+    expect(other.length).toBe(stripAnsi(settled).length)
+    const detail = rd(
+      {
+        ...model([waiting]),
+        selection: { kind: 'build', slug: waiting.slug },
+        view: { kind: 'detail', slug: waiting.slug, scroll: 0 },
+      },
+      WIDE,
+    )
+    expect(detail).toContain('   status WAITING (merge decision)')
+  })
+})
+
 describe('renderDashboard: queued dispatch rows', () => {
-  test('renders QUEUED, its actionable dispatch reason, and the conditional discard key', () => {
+  test('renders STARTING, its actionable dispatch reason, and the conditional discard key', () => {
     const queued = build({
       status: 'queued',
       steps: [],
@@ -558,7 +585,7 @@ describe('renderDashboard: queued dispatch rows', () => {
     frame.selection = { kind: 'build', slug: queued.slug }
     const lines = rd(frame, WIDE).map(stripAnsi)
     const text = lines.join('\n')
-    expect(text).toContain('QUEUED')
+    expect(text).toContain('STARTING')
     expect(text).not.toContain('(held)')
     expect(text).toContain('dispatch workspace failed (attempt 2): credentials missing')
     expect(text).toContain('d discard')
@@ -583,7 +610,7 @@ describe('renderDashboard: queued dispatch rows', () => {
     )
     const queuedLine = lines.find((line) => stripAnsi(line).includes('held-queue'))!
     const runningLine = lines.find((line) => stripAnsi(line).includes('free-running'))!
-    expect(stripAnsi(queuedLine)).toMatch(/\(held\)\s+QUEUED$/)
+    expect(stripAnsi(queuedLine)).toMatch(/\(held\)\s+STARTING$/)
     expect(queuedLine).toContain('\x1b[33m(held)\x1b[0m')
     expect(stripAnsi(runningLine)).not.toContain('(held)')
     expect(stripAnsi(runningLine)).toMatch(/RUNNING$/)
@@ -1356,16 +1383,17 @@ describe('renderDashboard: message previews', () => {
 })
 
 describe('renderDashboard: build header rows', () => {
-  const statuses: DashboardBuild['status'][] = [
-    'queued',
-    'running',
-    'pausing',
-    'paused',
-    'resuming',
-    'blocked',
-    'aborting',
-    'cleaning',
-  ]
+  const words: Record<string, string> = {
+    queued: 'STARTING',
+    running: 'RUNNING',
+    pausing: 'PAUSING',
+    paused: 'PAUSED',
+    resuming: 'QUEUED',
+    blocked: 'BLOCKED',
+    aborting: 'ABORTING',
+    cleaning: 'CLEANING',
+  }
+  const statuses = Object.keys(words) as DashboardBuild['status'][]
 
   test('render only the slug in the flexible segment for every lifecycle status', () => {
     for (const status of statuses) {
@@ -1373,11 +1401,11 @@ describe('renderDashboard: build header rows', () => {
         for (const width of [44, 120]) {
           const slug = `a-very-long-dashboard-build-slug-${status}`
           const lines = rd(model([build({ slug, status, pr: undefined })]), { color, width })
-          const row = lines.find((line) => stripAnsi(line).includes(status.toUpperCase()))!
+          const row = lines.find((line) => stripAnsi(line).includes(words[status]!))!
           const plain = stripAnsi(row)
           expect(plain).not.toContain('progress')
           expect(plain).not.toContain('diverged')
-          expect(plain.endsWith(status.toUpperCase())).toBe(true)
+          expect(plain.endsWith(words[status]!)).toBe(true)
           expect(cellWidth(plain)).toBe(width - 1)
           if (width === 44) expect(plain).toContain('~')
           else expect(plain).toContain(slug)
@@ -1548,7 +1576,7 @@ describe('renderDashboard: one-column horizontal frame gutters', () => {
     expect(controls).toContain('repository PAUSED')
     const queuedLine = stripAnsi(lines.find((line) => stripAnsi(line).includes('CAP-QUEUED'))!)
     expect(queuedLine).toContain('~')
-    expect(queuedLine).toMatch(/\(held\)\s+QUEUED$/)
+    expect(queuedLine).toMatch(/\(held\)\s+STARTING$/)
   })
 
   test('normal and narrow frames never paint either terminal edge or exceed their width', () => {
@@ -1601,7 +1629,7 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     expect(lines.filter((candidate) => candidate.startsWith(' > '))).toHaveLength(1)
   })
 
-  test('harvest and build statuses end in the same column and RUNNING uses the same green', () => {
+  test('harvest and build statuses end in the same column, and harvest is never green', () => {
     const dashboard = {
       ...model([
         build({ slug: 'build-row', pr: undefined }),
@@ -1611,10 +1639,13 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     }
     // Both statuses are right-pinned to terminal column N-1 without color too.
     const plainLines = rd(dashboard, { color: false, width: 100 })
-    for (const label of ['Harvest', 'build-row']) {
-      const line = plainLines.find((candidate) => candidate.includes(label))!
+    for (const [label, word] of [
+      ['Harvest', 'HARVESTING'],
+      ['build-row', 'RUNNING'],
+    ]) {
+      const line = plainLines.find((candidate) => candidate.includes(label!))!
       expect(line.length).toBe(99)
-      expect(line.endsWith('RUNNING')).toBe(true)
+      expect(line.endsWith(word!)).toBe(true)
     }
 
     const lines = rd(dashboard, { color: true, width: 100 })
@@ -1624,15 +1655,15 @@ describe('renderDashboard: harvest uses the selectable build-row grammar', () =>
     const harvestPlain = stripAnsi(harvestLine)
     const buildPlain = stripAnsi(buildLine)
     const pausedPlain = stripAnsi(pausedLine)
-    expect(harvestPlain.endsWith('RUNNING')).toBe(true)
+    expect(harvestPlain.endsWith('HARVESTING')).toBe(true)
     expect(buildPlain.endsWith('RUNNING')).toBe(true)
     expect(pausedPlain.endsWith('PAUSED')).toBe(true)
-    expect(harvestPlain.indexOf('RUNNING') + 'RUNNING'.length).toBe(
+    expect(harvestPlain.indexOf('HARVESTING') + 'HARVESTING'.length).toBe(
       pausedPlain.indexOf('PAUSED') + 'PAUSED'.length,
     )
     expect(harvestPlain.length).toBe(buildPlain.length)
     expect(harvestPlain.length).toBe(99)
-    expect(harvestLine).toContain('\x1b[32mRUNNING\x1b[0m')
+    expect(harvestLine).toContain('\x1b[36mHARVESTING\x1b[0m')
     expect(buildLine).toContain('\x1b[32mRUNNING\x1b[0m')
   })
 

@@ -13,6 +13,7 @@ import {
 } from './integration-row'
 import {
   dispatchCapacity,
+  epilogueLeaf,
   slotWaitText,
   startClaimDemand,
   urgentClaimDemand,
@@ -23,7 +24,7 @@ import { openBuildWorkspace, provisionMarkerReducer } from '../../processes/disp
 import { projectTree, treeVocabulary, type TreeProjection } from './tree'
 import { holdReason } from './landing-display'
 import { reopenedSummary, reopenedText } from './reopen-display'
-import { reopenSpecPending } from '../../kernel/reopen-state'
+import { reopenSpecPending, reviseSpecPending } from '../../kernel/reopen-state'
 import { ciFailureText, currentCiFailure } from '../../kernel/forge-checks'
 export { treeVocabulary, consentQueue } from './tree'
 import {
@@ -32,6 +33,7 @@ import {
   landingFallbackReason,
 } from '../../kernel/landing-state'
 import { projectObjectiveRow, type ObjectiveRow } from './objective-row'
+import type { StatusBasis } from './vocabulary'
 export {
   objectiveElapsedHours,
   objectiveNumber,
@@ -249,6 +251,10 @@ export function dashboardWait(state: BuildState): DashboardWait | undefined {
 }
 
 export interface DashboardBuild {
+  /** Display-only lifecycle facts the row's status word is chosen from
+   * (`buildStatusText`); absent on hand-built rows, which imply it from
+   * `status`. */
+  statusBasis?: StatusBasis
   /** The build's slot state from the frame's capacity projection (SPEC §12
    * "What holds a slot"); absent is unknown, never `none`. */
   slot?: SlotState
@@ -466,6 +472,21 @@ export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState
   if (state.status === 'done') return 'done'
   if (state.status === 'aborted') return 'cleaning'
   if (state.pendingCommands.some((command) => command.command === 'abort')) return 'aborting'
+  const resting = restingStatus(state)
+  if (resting === 'running' && state.pendingCommands.some((command) => command.command === 'pause'))
+    return 'pausing'
+  if (resting === 'paused' && state.pendingCommands.some((command) => command.command === 'resume'))
+    return 'resuming'
+  return resting
+}
+
+/** `effectiveStatus` with every pending command ignored: what the build rests
+ * on until a pause, resume or abort is acknowledged. */
+export function restingStatus(
+  state: BuildState,
+): Exclude<EffectiveStatus, 'pausing' | 'resuming' | 'aborting'> | 'done' {
+  if (state.status === 'done') return 'done'
+  if (state.status === 'aborted') return 'cleaning'
   if (state.kind === 'node' && integrationFailed(state)) return 'blocked'
   // A ticket wait whose escalation is the only one open reads as waiting; any
   // other open question outranks it and the build reads blocked.
@@ -481,17 +502,35 @@ export function effectiveStatus(state: BuildState): EffectiveStatus | BuildState
   ) {
     return 'blocked'
   }
-  if (state.status === 'running') {
-    return state.pendingCommands.some((command) => command.command === 'pause')
-      ? 'pausing'
-      : 'running'
-  }
-  if (state.status === 'paused') {
-    return state.pendingCommands.some((command) => command.command === 'resume')
-      ? 'resuming'
-      : 'paused'
-  }
   return state.status
+}
+
+/** The lifecycle facts a nonterminal build's status word is chosen from
+ * (`buildStatusText`), or undefined for a `done` build. Display-only. */
+export function statusBasis(state: BuildState): StatusBasis | undefined {
+  const resting = restingStatus(state)
+  if (resting === 'done') return undefined
+  const pending = (command: string) => state.pendingCommands.some((c) => c.command === command)
+  const settled = epilogueLeaf(state)
+    ? state.landing?.command?.kind === 'hold'
+      ? ('hold' as const)
+      : landingAuthorized(state.landing)
+        ? ('merging' as const)
+        : ('decision' as const)
+    : undefined
+  const waitTickets =
+    resting === 'waiting' ? openTicketWait(state)?.tickets.map((ticket) => ticket.id) : undefined
+  return {
+    resting,
+    ...(pending('pause') ? { pause: true as const } : {}),
+    ...(pending('abort') ? { abort: true as const } : {}),
+    ...(pending('resume') ? { resume: true as const } : {}),
+    runner: state.openExecution !== undefined,
+    ...(state.kind === 'node' ? { node: true as const } : {}),
+    ...(settled !== undefined ? { settled } : {}),
+    ...(reviseSpecPending(state) ? { reviseSpec: true as const } : {}),
+    ...(waitTickets?.length ? { waitTickets } : {}),
+  }
 }
 
 function isVisible(status: EffectiveStatus | BuildState['status']): status is EffectiveStatus {
@@ -674,6 +713,7 @@ export function projectBuildFromFacts(
   const dashboard = facts.dashboard
   const status = effectiveStatus(state)
   if (!isVisible(status)) return null
+  const basis = statusBasis(state)
   const wait = dashboardWait(state)
   const objective = projectObjectiveRow(state)
   const abortProgress =
@@ -752,6 +792,7 @@ export function projectBuildFromFacts(
         createdAt: record.createdAt,
       },
       status,
+      ...(basis !== undefined ? { statusBasis: basis } : {}),
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
       steps: [],
@@ -801,6 +842,7 @@ export function projectBuildFromFacts(
         createdAt: record.createdAt,
       },
       status,
+      ...(basis !== undefined ? { statusBasis: basis } : {}),
       alsoPaused: false,
       ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
       steps: [],
@@ -1172,6 +1214,7 @@ export function projectBuildFromFacts(
       createdAt: record.createdAt,
     },
     status,
+    ...(basis !== undefined ? { statusBasis: basis } : {}),
     alsoPaused: state.status === 'paused' && (status === 'blocked' || status === 'waiting'),
     ...(record.ticket?.id !== undefined ? { ticketId: record.ticket.id } : {}),
     steps:
