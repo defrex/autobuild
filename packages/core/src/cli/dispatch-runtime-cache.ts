@@ -10,6 +10,7 @@ import {
   mkdtemp,
   readFile,
   readdir,
+  rename,
   rm,
   writeFile,
   chmod,
@@ -392,28 +393,27 @@ type PreparedArchive =
 
 /** Digests the completed snapshot and, unless a matching runtime already
  * exists, round-trips its distribution archive through extraction and a real
- * import probe. Packaging starts speculatively beside the digest and is
- * awaited (or aborted and awaited) before this settles. */
+ * import probe. The archive check's dependency copy runs beside the digest
+ * and is awaited before this settles, whether or not it was needed. */
 async function prepareArchive(
   root: string,
   stage: string,
   cache: string,
   checkout: string,
   guest: { provenance: 'source' | 'registry' },
+  takeArchive: () => Promise<Uint8Array>,
 ): Promise<PreparedArchive> {
+  const modules = join(stage, 'archive-modules')
   return withSpeculation(
-    (signal) =>
-      packageDistribution(root, undefined, signal, undefined, {
-        gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL,
-      }),
-    async (take): Promise<PreparedArchive> => {
+    () => copyTreeVerbatim(join(root, 'node_modules'), modules),
+    async (takeModules): Promise<PreparedArchive> => {
       const digest = await treeDigest(root)
       const manifest = await readManifest(root)
       const id = `${String(manifest.version).replace(/[^\w.-]/g, '_')}-${guest.provenance}-guest1-${digest}`
       const destination = join(cache, id)
       const reusable = await cachedRuntime(join(destination, 'distribution'))
       if (reusable) return { kind: 'reuse', id, reusable }
-      const archive = await take()
+      const archive = await takeArchive()
       const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
       const extracted = join(stage, 'archive-check')
       await mkdir(extracted)
@@ -431,7 +431,11 @@ async function prepareArchive(
         throw new Error(`runtime archive lost compiler boundary: ${unpackError}`)
       await validateEntries(extracted)
       await validateCoreConfigs(extracted)
-      await copyTreeVerbatim(join(root, 'node_modules'), join(extracted, 'node_modules'))
+      await takeModules()
+      // Archived dependencies would shadow the verified layer copy.
+      if (existsSync(join(extracted, 'node_modules')))
+        throw new Error('runtime archive must not contain node_modules')
+      await rename(modules, join(extracted, 'node_modules'))
       await validateRuntimeImports(extracted, checkout)
       await rm(extracted, { recursive: true })
       return { kind: 'fresh', id, destination, digest, archive, archiveDigest }
@@ -461,35 +465,56 @@ export async function prepareRuntime(
     await rm(check, { recursive: true })
   }
   try {
-    // Every branch is joined before cleanup or publication, and the join
-    // reports failures in the order the stages once ran serially.
     const scanned = scanDependencies(source)
-    const [graph, codeDigest, layer] = await settleInOrder([
-      scanned,
-      (async () => {
-        await stageCode(source, root)
-        const digest = await treeDigest(root)
-        await recheckSource(digest)
-        return digest
-      })(),
-      scanned.then((graph) => acquireLayer(cache, stage, graph)),
-    ])
-    await copyTreeVerbatim(join(layer, 'distribution', 'node_modules'), join(root, 'node_modules'))
-    await validateEntries(root)
-    await validateCoreConfigs(root)
-    // The snapshot is complete. These branches only read it or the source, and
-    // nothing is reserved, returned or published until all of them pass.
-    const [, , , prepared] = await settleInOrder([
-      (async () => {
-        if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
-          throw new Error('installed dependencies changed while preparing runtime; retry dispatch')
-      })(),
-      recheckSource(codeDigest),
-      // Real Bun import graph validation uses the same pre-entry compiler boundary
-      // as every generation and runner. No automatic installer can run here.
-      validateRuntimeImports(root, checkout),
-      prepareArchive(root, stage, cache, checkout, guest),
-    ])
+    const staged = stageCode(source, root)
+    // Every branch is joined before cleanup or publication, and each join
+    // reports failures in the order the stages once ran serially. Packaging
+    // reads only the staged code, so it starts as soon as that is complete and
+    // is awaited, or aborted and awaited, before anything else proceeds.
+    const { graph, prepared } = await withSpeculation(
+      async (signal) => {
+        await staged
+        signal.throwIfAborted()
+        return packageDistribution(root, undefined, signal, undefined, {
+          gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL,
+        })
+      },
+      async (takeArchive) => {
+        const [graph, codeDigest, layer] = await settleInOrder([
+          scanned,
+          (async () => {
+            await staged
+            const digest = await treeDigest(root)
+            await recheckSource(digest)
+            return digest
+          })(),
+          scanned.then((graph) => acquireLayer(cache, stage, graph)),
+        ])
+        await copyTreeVerbatim(
+          join(layer, 'distribution', 'node_modules'),
+          join(root, 'node_modules'),
+        )
+        await validateEntries(root)
+        await validateCoreConfigs(root)
+        // The snapshot is complete. These branches only read it or the source,
+        // and nothing is reserved, returned or published until all of them pass.
+        const [, , , prepared] = await settleInOrder([
+          (async () => {
+            if ((await scanDependencies(source)).fingerprint !== graph.fingerprint)
+              throw new Error(
+                'installed dependencies changed while preparing runtime; retry dispatch',
+              )
+          })(),
+          recheckSource(codeDigest),
+          // Real Bun import graph validation uses the same pre-entry compiler
+          // boundary as every generation and runner. No automatic installer
+          // can run here.
+          validateRuntimeImports(root, checkout),
+          prepareArchive(root, stage, cache, checkout, guest, takeArchive),
+        ])
+        return { graph, prepared }
+      },
+    )
     if (prepared.kind === 'reuse') {
       reservePreparedRuntime(cache, prepared.id)
       await validateRuntime(prepared.reusable)
