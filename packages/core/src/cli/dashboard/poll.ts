@@ -94,6 +94,7 @@ interface ReducedEntry {
   state: BuildState
   workspace: boolean
   provisioning: boolean
+  provisioningSeq?: number
   restackDue: boolean
   build: DashboardBuild | null
 }
@@ -108,6 +109,10 @@ export function isDashboardTerminal(state: BuildState): boolean {
 }
 
 export { capacityBuildFromFacts }
+
+function provisioningSeqOf(seq: number | undefined): Pick<CapacityBuild, 'provisioningSeq'> {
+  return seq === undefined ? {} : { provisioningSeq: seq }
+}
 
 /** The display-only reads that decorate one row: authoritative stream
  * records (SPEC §9) and the pinned effective-config artifact (SPEC §16.1). */
@@ -353,6 +358,9 @@ export class DashboardBuildPollCache {
             state: value.state,
             workspace: capacity.workspace,
             provisioning: capacity.provisioning,
+            ...(capacity.provisioningSeq !== undefined
+              ? { provisioningSeq: capacity.provisioningSeq }
+              : {}),
             restackDue: capacity.restackDue,
             build:
               current?.kind === 'reduced' &&
@@ -438,6 +446,9 @@ export class DashboardBuildPollCache {
         workspace: entry.kind === 'reduced' ? entry.workspace : entry.workspace.open !== null,
         provisioning:
           entry.kind === 'reduced' ? entry.provisioning : entry.provisionMarker.marker !== null,
+        ...provisioningSeqOf(
+          entry.kind === 'reduced' ? entry.provisioningSeq : entry.provisionMarker.marker?.seq,
+        ),
         restackDue:
           entry.kind === 'reduced'
             ? entry.restackDue

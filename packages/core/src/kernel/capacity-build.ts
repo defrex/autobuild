@@ -9,12 +9,13 @@ import { landingRestackDue } from './engine'
 export function capacityBuildFromFacts(
   record: BuildRecord,
   value: CurrentBuildFacts,
-): Required<CapacityBuild> {
+): Required<Omit<CapacityBuild, 'provisioningSeq'>> & Pick<CapacityBuild, 'provisioningSeq'> {
   return {
     record,
     state: value.state,
     workspace: value.workspace !== null,
     provisioning: value.provisionMarker !== undefined,
+    ...(value.provisionMarker !== undefined ? { provisioningSeq: value.provisionMarker.seq } : {}),
     restackDue: landingRestackDue(value.state, value.log),
   }
 }
