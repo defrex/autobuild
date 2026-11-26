@@ -573,6 +573,11 @@ for (let part = 0; part < releaseBudgetParts; part++)
     await releaseObservationBudget(part, releaseBudgetParts)
   })
 
+test('runtime-owned reader commands cost the same at both journal lengths', async () => {
+  const { readerCommandReadBudget } = await import('../testing/dispatch-read-budget')
+  await readerCommandReadBudget(new MemoryBuildStore())
+})
+
 test('transient writes retry without events at capped exponential deadlines, then settle', async () => {
   const store = new MemoryBuildStore()
   await store.ensureRepo(repo)
