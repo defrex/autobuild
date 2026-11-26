@@ -13,16 +13,19 @@ import {
   rm,
   stat,
   symlink,
+  utimes,
   writeFile,
 } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, relative, resolve } from 'node:path'
 import { TREE_IO_CONCURRENCY } from './bounded-io'
 import {
+  assertTreeUnchanged,
   copySnapshotTree,
   copyTreeVerbatim,
   inside,
   scanDependencies,
+  sealTreeWitness,
   treeDigest,
 } from './dispatch-runtime-dependencies'
 
@@ -158,6 +161,56 @@ test('copyTreeVerbatim matches a verbatim fs.cp copy', async () => {
   await cp(source, join(base, 'cp'), { recursive: true, verbatimSymlinks: true })
   await copyTreeVerbatim(source, join(base, 'verbatim'))
   expect(await listing(join(base, 'verbatim'))).toEqual(await listing(join(base, 'cp')))
+})
+
+test('tree witness detects changes that preserve size and mtime', async () => {
+  const source = await temp()
+  await file(join(source, 'a.js'), 'exports.a = 1')
+  await file(join(source, 'nested/b.js'), 'exports.b = 1')
+  await file(join(source, 'run.sh'), '#!/bin/sh')
+  await chmod(join(source, 'run.sh'), 0o755)
+  await symlink('a.js', join(source, 'link.js'))
+  const base = await temp()
+  // Each change names every node it touches; the check reports whichever it reaches first.
+  const changes: Record<string, [string[], (tree: string) => Promise<void>]> = {
+    'rewrite with restored mtime': [
+      ['a.js'],
+      async (tree) => {
+        const { atime, mtime } = await stat(join(tree, 'a.js'))
+        await writeFile(join(tree, 'a.js'), 'exports.a = 2')
+        await utimes(join(tree, 'a.js'), atime, mtime)
+      },
+    ],
+    chmod: [['run.sh'], (tree) => chmod(join(tree, 'run.sh'), 0o700)],
+    relink: [
+      ['link.js', ''],
+      async (tree) => {
+        await rm(join(tree, 'link.js'))
+        await symlink('run.sh', join(tree, 'link.js'))
+      },
+    ],
+    delete: [['nested/b.js', 'nested'], (tree) => rm(join(tree, 'nested/b.js'))],
+    add: [['nested'], (tree) => writeFile(join(tree, 'nested/c.js'), '')],
+  }
+  for (const [name, [paths, change]] of Object.entries(changes)) {
+    const tree = join(base, name)
+    const witness = await copyTreeVerbatim(source, tree)
+    await sealTreeWitness(witness, join(base, `${name}.barrier`))
+    await assertTreeUnchanged(witness, 'tree')
+    for (const entry of ['a.js', 'nested/b.js', 'run.sh', 'link.js'])
+      await readFile(join(tree, entry))
+    await assertTreeUnchanged(witness, 'tree')
+    await change(tree)
+    const refusal = await assertTreeUnchanged(witness, 'tree').then(
+      () => '',
+      (error: Error) => error.message,
+    )
+    expect(
+      paths.map(
+        (path) => `tree changed during import validation: ${join(tree, path)}; retry dispatch`,
+      ),
+    ).toContain(refusal)
+  }
 })
 
 test('dependency ids keep sorted depth-first order and a stable fingerprint', async () => {
