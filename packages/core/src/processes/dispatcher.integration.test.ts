@@ -6074,7 +6074,7 @@ describe('Dispatcher startup resume', () => {
     expect(after.filter((e) => e.type === 'slot.admitted').map((e) => e.payload)).toEqual([
       { request: 'resume' },
     ])
-    expect(after.filter((e) => e.type !== 'slot.admitted')).toEqual(
+    expect(after.filter((e): boolean => e.type !== 'slot.admitted')).toEqual(
       before.filter((e): boolean => e.type !== 'target.distance'),
     )
   })
