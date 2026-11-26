@@ -69,6 +69,7 @@ test('repository installs mandatory lint and the path-scoped dashboard verifiers
       'tools/harvest-suspension-capture.ts',
       'tools/native-session-capture.ts',
       'tools/judge-session-capture.ts',
+      'tools/status-vocabulary-capture.ts',
     ],
   })
   expect(config.verify.stepConfigs['ui-app']).toEqual({

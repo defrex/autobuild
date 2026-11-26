@@ -143,7 +143,7 @@ spec → plan ⇄ plan-review → implement ⇄ code-review → verify:* → fin
   except that a verify or finalize wait whose restack replayed cleanly
   re-verifies every step from the first, at a new attempt, before finalize or
   merge. `ab build status` shows a `waiting on:` line naming the tickets,
-  and `ab builds` and both dashboards show the build as `waiting` on them.
+  and `ab builds` and both dashboards show the build as `WAITING` on them.
   Node builds cannot declare waits.
 - **Failed preparation.** Durable preparation facts protect the claim-to-build
   interval. Caught failures return tickets to Ready (invalid specs to Triage),
@@ -2711,11 +2711,43 @@ steps and current outcomes, repair instructions, and the merge rule. Cancelled
 children are omitted; historical missing titles or filenames are explicit.
 A work build waiting for a slot, one that finished its pipeline and must
 re-verify or reconcile or one resuming after an answered escalation, a resumed
-pause or an ended ticket wait (`resume`), shows the same slot-wait alert on its row,
-and `ab builds` appends it to the phase. A build whose only open escalation is
-its open ticket wait shows `WAITING` and a yellow (amber on the web)
+pause or an ended ticket wait (`resume`), reads teal `QUEUED` with its request
+as the note (`resume`, `urgent reconcile`), shows the same
+slot-wait alert on its row, and `ab builds` appends it to the phase. A build
+whose only open escalation is its open ticket wait shows amber `WAITING` with
+an `on <ids>` note and a yellow (amber on the web)
 `waiting on <ids> — <reason>` line, distinct from a red `BLOCKED` question;
 `r` / RESUME answers the wait and ends it early.
+
+**Status words.** Every nonterminal build row on both dashboards, `ab builds`
+and `ab build status` shows one word from one closed vocabulary. Its color says
+whether the build holds a slot: every green word holds one, teal `QUEUED` has
+requested one, and every other word holds none. The word says why, and a short
+parenthesized note beside it (`merge decision`) says which case. The header's
+`active <occupied>/<limit>` counts the green rows.
+
+| Color | Slot | Word | Shown when |
+|---|---|---|---|
+| green | held | `RUNNING` | a runner is working |
+| green | held | `STARTING` | no runner works yet: provisioning a newly claimed build, a relaunch, spec publication, an upgrade drain, a suspended session |
+| green | held | `PAUSING` | a pause was requested and the runner is still stopping |
+| green | held | `ABORTING` | an abort was requested and the runner is still stopping |
+| teal | requested | `QUEUED` | parked work waiting for admission; the note names the request (`resume`, `reconcile`, `verification`, `reopen`, `propose`) and marks urgent waiters |
+| amber | none | `WAITING` | a finished pipeline waiting for a merge decision (`merge decision`) or on hold (`on hold`), an entered ticket wait (`on <ids>`), or a `revise-spec` answer waiting for its revision (`spec revision`) |
+| amber | none | `MERGING` | a finished pipeline with merge consent, waiting for merge gates or the forge |
+| amber | none | `PAUSED` | an acknowledged pause |
+| amber | none | `COLLECTING` | an integration build collecting child work |
+| red | none | `BLOCKED` | an open escalation other than a ticket wait's own, or a failed node verification waiting for a repair child |
+| dim | none | `CLEANING` | abort cleanup |
+
+`BLOCKED` outranks `PAUSED`. Only a build holding a slot shows `PAUSING` or
+`ABORTING`; a build without one keeps its word until the pause or abort is
+acknowledged. A resumed pause reads `QUEUED` with a `resume` note until it is
+admitted again. The reducer's lifecycle statuses (`queued`, `running`, `collecting`, …)
+are not display words: a newly claimed `queued` build reads `STARTING`, and a
+settled `running` build reads `WAITING` or `MERGING`. The Harvest row is never
+green: `HARVESTING` (teal) while it works, `PAUSED` or `SUSPENDED` (amber)
+while stopped, `ESCALATED` or `FAILED` (red) when it needs a human.
 
 
 On a TTY, execution-mode `ab dispatch` renders one fixed interactive frame that fills the
@@ -2781,11 +2813,12 @@ from the builds by one blank line. The duplicate startup banner is
 suppressed; `--plain` and non-TTY output remain line-oriented and unchanged. A
 satisfied verify skip carries the literal `skipped` qualifier, so it remains
 distinct from a pass without color. Every nonterminal build has a row,
-including `queued` builds that have not attached a runner. A queued row shows
-its ticket, slug, literal `QUEUED` status, and either the pending dispatch
-boundary or the latest durable `dispatch.failed` stage, attempt, and error.
-While the repository hold is set, only queued rows gain a yellow `(held)`
-modifier beside `QUEUED`; intake being off without that hold shows neither
+including `queued` builds that have not attached a runner. A newly claimed
+build holds its slot from the claim, so its row shows its ticket, slug, green
+`STARTING` status, and either the pending dispatch boundary or the latest
+durable `dispatch.failed` stage, attempt, and error.
+While the repository hold is set, only these queued rows gain a yellow `(held)`
+modifier beside `STARTING`; intake being off without that hold shows neither
 `repository PAUSED` nor `(held)`.
 
 A build row previews each unresolved blocker and setup error as at most three
@@ -2827,35 +2860,38 @@ eligibility, plus the state-specific `p pause`, `p cancel pause`, or `r resume`
 action; queued builds offer `d discard`. Merge requires readiness; hold may be
 recorded before readiness. There is no repository merge toggle.
 
-A running build reads `PAUSING` after `p` appends its pause request and before
-the live session stops and the kernel records its suspension. Pause interrupts
+A running build that holds its slot reads `PAUSING` after `p` appends its pause
+request and before the live session stops and the kernel records its
+suspension; a build without a slot, such as one waiting for its merge
+decision, keeps its word until the acknowledgement. Pause interrupts
 live agent work immediately; resume continues where it stopped when supported,
 while remote or unsupported sessions rerun fresh with a recorded fallback reason.
 Without a live agent, acknowledgement still waits for a safe boundary. During
 that window `p` appends
-the opposing resume request, cancels the stale pause, and projects the build
-back to `RUNNING`. The cancelling resume holds back nothing, including merge
+the opposing resume request, cancels the stale pause, and the build
+reads its previous word again. The cancelling resume holds back nothing, including merge
 readiness and janitor retry backoff. An acknowledged paused build offers only `r resume` and reads
-`RESUMING` until the kernel acknowledges that request; there is no gesture to
+`QUEUED` with a `resume` note until it is admitted to a slot again; there is no gesture to
 cancel a pending resume. Blocked takes visual precedence, including when the
 build is also operator-paused, and `r` opens the existing feedback field. Keys
 that are not offered for the current build state are no-ops and append no
 control event.
 
 Global-row `p` is the repository-wide version — the same walk `ab pause --all`
-runs sessionless: it durably holds every `QUEUED` build, turns intake off, and
-appends `build.pause-requested` to every `RUNNING` build, so the repository
+runs sessionless: it durably holds every queued build, turns intake off, and
+appends `build.pause-requested` to every running build, so the repository
 comes to rest before a machine, terminal, or dispatcher restart. The hold is the `dispatcher.pause-set` repository fact, written before
 the intake fact; while it is set no dispatcher tick attaches a runner to a
 queued build, whether through interrupted-dispatch recovery, startup resume, or
-the lease sweep. The per-build walk skips `PAUSING` — the bulk control never
-cancels a pending pause, unlike build-row `p` — and skips `QUEUED`, `PAUSED`,
-`RESUMING`, and `BLOCKED` without error; queued builds are covered by the hold
+the lease sweep. The per-build walk skips a build whose pause is already
+pending — the bulk control never cancels a pending pause, unlike build-row
+`p` — and skips queued, paused, resume-pending, and blocked builds without
+error; queued builds are covered by the hold
 instead. Global-row `r` reverses all of it: the hold released,
-`build.resume-requested` on every `PAUSED` build (including builds paused by
+`build.resume-requested` on every paused build (including builds paused by
 hand beforehand), and intake back on. A released queued build becomes
 launchable again on the next ordinary tick, with no further operator action. `r`
-does not touch `BLOCKED` builds, whose blockers still need the per-build `r`
+does not touch blocked builds, whose blockers still need the per-build `r`
 feedback field. Both report the affected build count, the hold, and the new
 intake value on the notice row. One carve-out remains: the harvest gate is
 independent, so a harvest session can still start after a bulk pause (`h` stops
@@ -2907,7 +2943,10 @@ as builds; its internal run id is not shown. One row selects the oldest
 unresolved ordinary failure, exhaustion, or escalation attention before the
 oldest open run, so later running/completed work cannot hide it. Completed runs,
 an idle paused repository, acknowledged recovery exhaustion, and dismissed
-escalation have no row. A paused open run freezes and reads `PAUSED`. Ordinary
+escalation have no row. A working run reads teal `HARVESTING`; a harvest run
+never holds a slot, so it is never green. A paused open run freezes and reads
+amber `PAUSED`, and a suspended one `SUSPENDED`. Escalation reads red
+`ESCALATED`. Ordinary
 failure reads red `FAILED`, marks the stopped step, shows automatic progress,
 and offers `p resume`. Exhaustion remains red, says `recovery exhausted — human
 attention required`, shows stopped step/pending count, and offers `p
@@ -2952,10 +2991,10 @@ to the build's event log and apply the same write-time checks.
 | Intent | CLI | Dashboard | Durable event(s) |
 |---|---|---|---|
 | Discard interrupted dispatch | — | Select a queued build and press `d`. | `build.discard-requested` |
-| Pause | `ab pause <slug> [--store <ref>]` | Select a `RUNNING` build and press `p`; press `p` again while `PAUSING` to cancel the pending pause. | `build.pause-requested`; cancellation reuses `build.resume-requested` |
-| Resume | `ab resume <slug> [--store <ref>]` | Select a `PAUSED` build and press `r`. | `build.resume-requested` |
-| Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per `RUNNING` build |
-| Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per `PAUSED` build |
+| Pause | `ab pause <slug> [--store <ref>]` | Select a running build and press `p`; press `p` again while its pause is pending to cancel it. | `build.pause-requested`; cancellation reuses `build.resume-requested` |
+| Resume | `ab resume <slug> [--store <ref>]` | Select a paused build and press `r`. | `build.resume-requested` |
+| Pause all | `ab pause --all [--store <ref>] [--json]` | Select the global row and press `p`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.pause-requested` per running build |
+| Resume all | `ab resume --all [--store <ref>] [--json]` | Select the global row and press `r`. | `dispatcher.pause-set` (first), `dispatcher.intake-set`, then one `build.resume-requested` per paused build |
 | Consent to merge | `ab merge <slug> [--head <sha>] [--store <ref>]` | Select a ready build and press `l`. | `build.land-requested`, then `landing.command-acknowledged` |
 | Restack node | `ab restack <node> [--store <ref>]` | CLI/tool request; normal safety gates apply. | `node.restack-requested`, then `node.restack-satisfied` |
 | Show or revise an objective | `ab objective <node> [--threshold n] [--epsilon n\|n%] [--max-attempts n] [--max-hours n] [--plateau n] [--stop-mode abort\|drain] [--concurrency n] [--json] [--store <ref>]` | CLI/tool request (`optimization.revise`); without flags it only shows the effective objective and progress. Running attempts are unaffected; revised stop rules apply on the next tick. | `optimization.objective-revised` |
@@ -3264,7 +3303,11 @@ signal, not a stalled/dead verdict. `SLOT` (`slot` in JSON) is the build's
 slot state by the rules the dispatcher admits work by: `held`,
 `requested <request>` with an `urgent` suffix for urgent work, or `none`; `—`
 for a done build. `unknown`, or no `slot` in JSON, is an older server's answer;
-never read it as `none`.
+never read it as `none`. `STATUS` prints the build's status word with its note
+(see "Status words"), and JSON adds it as `statusWord` while `status` stays
+the reducer's lifecycle status, which the filters below select on. On an
+interactive terminal `ab builds` and `ab build status` color the word with its
+tone; piped, redirected or under `--json` they print it plain.
 
 | Flag | Effect |
 |---|---|
@@ -3605,7 +3648,8 @@ terminal set keeps waiting for a build to appear), named slugs target exactly
 those builds, and an unknown slug is an error before waiting begins. Inside a
 phase, only the ambient build may be waited on.
 
-At least one `--for <condition>` or `--event <glob>` is required. The condition
+At least one `--for <condition>` or `--event <glob>` is required. The conditions
+are lifecycle statuses, not the dashboards' status words. The condition
 vocabulary is closed: `blocked`, `paused`, `running`, `collecting`, `done`, `aborted`,
 `terminal` (done or aborted), `pr=open`, `pr=merged`, `pr=closed`,
 `pr=conflicted`, `phase=<phase>` (a core phase — `plan`, `plan-review`,

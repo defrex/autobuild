@@ -664,7 +664,7 @@ describe('slot admission order', () => {
         startRequests: { manual: 1, urgent: 2, normal: 1 },
       }
       expect(waitingExplanation(capacity)).toBe(
-        '1 manual start request waiting ahead of all other work; 2 urgent start requests waiting ahead of normal parked work; 1 normal start request waiting for a slot; 1 parked build waiting for a slot ahead of normal ticket claims: a',
+        '1 manual start request waiting ahead of all other work; 2 urgent start requests waiting ahead of normal parked work; 1 parked build waiting for a slot ahead of normal ticket claims: a; 1 normal start request waiting for a slot',
       )
     })
   })
@@ -688,11 +688,33 @@ describe('slot admission order', () => {
       urgentClaims: 1,
     }
     expect(waitingExplanation(capacity)).toBe(
-      '2 parked builds waiting for a slot ahead of normal ticket claims: b (urgent), a; 1 urgent ticket claim waiting ahead of normal parked work',
+      '1 parked build waiting for a slot ahead of normal ticket claims: b (urgent); 1 urgent ticket claim waiting ahead of normal parked work; 1 parked build waiting for a slot ahead of normal ticket claims: a',
     )
     expect(waitingExplanation(capacity, { requests: true })).toBe(
-      '2 parked builds waiting for a slot ahead of normal ticket claims: b (reconcile, urgent), a (verification); 1 urgent ticket claim waiting ahead of normal parked work',
+      '1 parked build waiting for a slot ahead of normal ticket claims: b (reconcile, urgent); 1 urgent ticket claim waiting ahead of normal parked work; 1 parked build waiting for a slot ahead of normal ticket claims: a (verification)',
     )
+    // Every tier, in slot admission order (SPEC §12).
+    expect(
+      waitingExplanation({
+        ...capacity,
+        waitingNodes: [
+          { slug: 'n', request: 'verification' },
+          { slug: 'u', request: 'propose', priority: 'urgent' },
+        ],
+        startRequests: { manual: 1, urgent: 1, normal: 1 },
+      })
+        .split('; ')
+        .map((clause) => clause.split(' waiting')[0]),
+    ).toEqual([
+      '1 manual start request',
+      '1 node',
+      '1 parked build',
+      '1 urgent start request',
+      '1 urgent ticket claim',
+      '1 node',
+      '1 parked build',
+      '1 normal start request',
+    ])
     expect(waitingExplanation({ ...capacity, waitingBuilds: [], urgentClaims: 2 })).toBe(
       '2 urgent ticket claims waiting ahead of normal parked work',
     )
