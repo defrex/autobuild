@@ -27,7 +27,8 @@
  */
 import type { RepositoryEvent } from '../events/repository'
 import { defineReducer } from './incremental'
-import { discardInFlight, type BuildState } from './reducer'
+import type { BuildState } from './reducer'
+import { discardInFlight } from './discard-in-flight'
 
 /** One `dispatcher.auto-merge-default-set` fact, resolved. `actor` is the
  * event's actor — the human who toggled, `via` marker included — and is the

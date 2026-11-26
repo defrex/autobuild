@@ -1,10 +1,7 @@
 import { rollbackRuntimeRetained } from './dispatch-runtime-use'
 import { join, resolve, dirname } from 'node:path'
-import { openSessionlessStore, openProductionStore, type StoreOpener } from './store-opening'
-import { projectToken } from './project-credentials'
-import { spawnExec } from '../ports/workspace/git-worktree'
-import { parseDispatchArgs } from './dispatch-args'
-import { readDispatchUpgrade, readDispatcherRunFacts } from '../store/reduced-reads'
+import type { StoreOpener } from './production-store'
+import type { readDispatcherRunFacts } from '../store/reduced-reads'
 import { cachedRuntime } from './dispatch-runtime-cache'
 import type {
   GenerationLaunch,
@@ -18,6 +15,11 @@ import type { UpgradeRun } from '../kernel/dispatch-upgrade'
 type DispatcherRunFacts = Awaited<ReturnType<typeof readDispatcherRunFacts>>['value']
 import type { Handoff } from '../kernel/dispatch-upgrade'
 
+/** Reader commands run in short-lived processes, so they initialize only what
+ * their operation needs: store, reducer and argument modules load at first
+ * use, and a reader with a journal never resolves repository configuration. */
+const reducedReads = () => import('../store/reduced-reads')
+
 /** Once a held run identifies its journal, readers retain that transport
  * identity across rejected configuration edits. It conveys no lifecycle result. */
 export async function openGenerationStore(
@@ -28,11 +30,21 @@ export async function openGenerationStore(
 ) {
   if (launch.journal) {
     const { storeRef, repo } = launch.journal
-    const token = /^https?:/i.test(storeRef) ? projectToken(storeRef, repo, env) : env.AB_TOKEN
-    return { store: (openStore ?? openProductionStore)(storeRef, token), storeRef, repo }
+    const token = /^https?:/i.test(storeRef)
+      ? (await import('./project-credentials')).projectToken(storeRef, repo, env)
+      : env.AB_TOKEN
+    const store = openStore
+      ? openStore(storeRef, token)
+      : await (await import('./production-store')).openProductionStoreAsync(storeRef, token)
+    return { store, storeRef, repo }
   }
+  const [{ parseDispatchArgs }, { spawnExec }, { openSessionlessStoreLazily }] = await Promise.all([
+    import('./dispatch-args'),
+    import('../ports/workspace/git-worktree'),
+    import('./sessionless-store'),
+  ])
   const args = parseDispatchArgs(argv.slice(1), env)
-  return openSessionlessStore({
+  return openSessionlessStoreLazily({
     targetRepo: launch.checkout,
     exec: spawnExec,
     env,
@@ -47,8 +59,9 @@ export async function readGenerationJournal(
   launch: GenerationLaunch,
   argv: string[],
   env: Record<string, string | undefined>,
+  options: { openStore?: StoreOpener } = {},
 ) {
-  const opened = await openGenerationStore(launch, argv, env)
+  const opened = await openGenerationStore(launch, argv, env, options.openStore)
   try {
     await opened.store.ensureRepo(opened.repo)
     return {
@@ -67,11 +80,13 @@ export async function readHandoff(
   argv: string[],
   env: Record<string, string | undefined>,
   live = false,
+  options: { openStore?: StoreOpener } = {},
 ): Promise<Handoff | undefined> {
   if (!launch.run || !launch.lineage) return undefined
-  const opened = await openGenerationStore(launch, argv, env)
+  const opened = await openGenerationStore(launch, argv, env, options.openStore)
   try {
     if (!(await opened.store.getRepo(opened.repo))) return undefined
+    const { readDispatchUpgrade, readDispatcherRunFacts } = await reducedReads()
     const state = (await readDispatchUpgrade(opened.store, opened.repo)).value.runs[launch.run]
     const selected = live ? state?.prepared : state?.handoff
     if (!selected || (!live && state?.completed) || state?.failure) return undefined
@@ -169,6 +184,7 @@ export async function readUpgradeProjection(
     let projection: UpgradeProjection = { version: 1, handoff: null, takeover: false }
     let guards: UpgradeGuards | undefined
     if (journal) {
+      const { readDispatchUpgrade, readDispatcherRunFacts } = await reducedReads()
       const upgrades = (await readDispatchUpgrade(opened.store, opened.repo)).value
       const state = upgrades.runs[launch.run!]
       const facts =
@@ -233,6 +249,7 @@ export async function recordPreflightFailure(
 ) {
   const opened = await openGenerationStore(launch, argv, env)
   try {
+    const { readDispatchUpgrade, readDispatcherRunFacts } = await reducedReads()
     const state = (await readDispatchUpgrade(opened.store, opened.repo)).value.runs[launch.run!]
     const facts = (await readDispatcherRunFacts(opened.store, opened.repo, launch.run!)).value
     if (facts.stopRequest) return
@@ -268,6 +285,7 @@ export async function recoverTerminalRelease(
     throw new Error('terminal recovery requires the owning launcher')
   const opened = await openGenerationStore(launch, argv, env)
   try {
+    const { readDispatchUpgrade, readDispatcherRunFacts } = await reducedReads()
     const state = (await readDispatchUpgrade(opened.store, opened.repo)).value.runs[launch.run!]
     const facts = (await readDispatcherRunFacts(opened.store, opened.repo, launch.run!)).value
     if (
@@ -298,6 +316,7 @@ export async function recordRuntimeRollback(
   run: string,
 ): Promise<void> {
   const context = launch.rollback
+  const { readDispatchUpgrade } = await reducedReads()
   if (launch.recovery) {
     const recovery = launch.recovery
     const state = (await readDispatchUpgrade(store, repo)).value.runs[recovery.predecessor]
