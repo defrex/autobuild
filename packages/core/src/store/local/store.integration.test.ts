@@ -1738,3 +1738,80 @@ describe('SqliteBuildStore rollup serialization (SPEC §7.7)', () => {
       }
     })
 })
+
+test('a cold process validates each event write before mutation when validation loads on first use', async () => {
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env))
+    if (value !== undefined && !key.startsWith('AB_')) env[key] = value
+  const run = async (root: string, valid: boolean) => {
+    const script = `
+      const { openLocalStore } = await import(${JSON.stringify(join(import.meta.dir, 'store.ts'))})
+      const { Database } = await import('bun:sqlite')
+      const root = process.env.STORE_ROOT
+      const valid = process.env.VALID_WRITES === '1'
+      const store = openLocalStore(root)
+      const db = new Database(root + '/autobuild.sqlite', { readonly: true })
+      const count = (table) => db.query('SELECT count(*) AS n FROM ' + table).get().n
+      const deferred = !Object.keys(require.cache).some((key) => key.endsWith('/events/repository.ts'))
+      const out = { deferred }
+      const attempt = async (name, table, write) => {
+        const before = count(table)
+        try {
+          await write()
+          out[name] = { outcome: 'accepted', added: count(table) - before }
+        } catch (error) {
+          out[name] = { outcome: error?.name ?? String(error), added: count(table) - before }
+        }
+      }
+      const human = { kind: 'human', user: 'op' }
+      await store.ensureRepo('/repo')
+      await attempt('repository', 'repo_events', () =>
+        store.appendRepo('/repo', {
+          actor: human,
+          type: 'dispatcher.intake-set',
+          payload: { enabled: valid ? true : 'no' },
+        }),
+      )
+      if (!valid) {
+        await store.createBuild({ slug: 'cold', repo: '/repo' })
+        await attempt('build', 'events', () =>
+          store.append('cold', { actor: human, type: 'build.paused', payload: { nope: 1 } }),
+        )
+        const session = await store.createSession({ repo: '/repo', operator: 'op' })
+        await attempt('session', 'session_events', () =>
+          store.appendSessionEvent(session.id, {
+            actor: human,
+            type: 'message.posted',
+            payload: { text: 7 },
+          }),
+        )
+      }
+      db.close()
+      await store.close()
+      console.log(JSON.stringify(out))
+    `
+    const proc = Bun.spawn([process.execPath, '-e', script], {
+      env: { ...env, STORE_ROOT: root, VALID_WRITES: valid ? '1' : '0' },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    expect(code, stderr).toBe(0)
+    return JSON.parse(stdout.trim())
+  }
+  const rejected = { outcome: 'EventValidationError', added: 0 }
+  expect(await run(await freshRoot(), false)).toEqual({
+    deferred: true,
+    repository: rejected,
+    build: rejected,
+    session: rejected,
+  })
+  expect(await run(await freshRoot(), true)).toEqual({
+    deferred: true,
+    repository: { outcome: 'accepted', added: 1 },
+  })
+}, 60_000)

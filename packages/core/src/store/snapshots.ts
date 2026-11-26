@@ -1,4 +1,4 @@
-import { READ_CATALOG_IDENTITY } from '../events/compatibility'
+import { READ_CATALOG_IDENTITY } from '../events/catalog-identity'
 /**
  * Reducer snapshots: a cache beside the event log, never an authority.
  *
