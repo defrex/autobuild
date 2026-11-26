@@ -8,7 +8,12 @@
  */
 import { openLocalStore } from '../store/local/store'
 import type { BuildStore } from '../store/types'
-import { isRemoteStoreRef } from './repo-state'
+
+/** An http(s) reference names the remote HTTP adapter; anything else is a
+ * local filesystem path. */
+export function isRemoteStoreRef(ref: string): boolean {
+  return /^https?:\/\//i.test(ref)
+}
 
 export interface ResolveStoreOpts {
   /** Constructs the remote HTTP store (§7.2.2); production wiring is external. */

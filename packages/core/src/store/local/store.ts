@@ -6,16 +6,9 @@ import {
   type OperatorIdentity,
   type OperatorPresence,
 } from '../operator-presence'
-import { READ_CATALOG_IDENTITY } from '../../events/compatibility'
-import { readPersistedBuildDigests } from '../reduced-reads'
+import { READ_CATALOG_IDENTITY } from '../../events/catalog-identity'
 import { assertPublicSnapshotReducer } from '../snapshots'
-import {
-  readReducerValue,
-  resolveReducerValue,
-  type ReducerValueRequest,
-  type ReducerValue,
-} from '../reducer-values'
-import { validateTickFinish } from '../repo-tick'
+import type { ReducerValueRequest, ReducerValue } from '../reducer-value-read'
 import {
   buildPageOrder,
   decodeBuildPageCursor,
@@ -37,7 +30,8 @@ import type { RepoTickCompletion, RepoTickFinish, RepoTickObservation } from '..
  * explicitly resolved local state root. Repository/default selection belongs
  * to the CLI; this adapter only opens the path it is given.
  *
- * Every write goes through `validateEventWrite` (§8 — the enforced ontology).
+ * Every write goes through `validateEventWrite` (§8 — the enforced ontology),
+ * loaded on first use (`./capabilities`) before the write's transaction.
  * Seq assignment and `appendWithArtifacts` are transactional: bun:sqlite
  * transactions are synchronous, so the atomic path (D6) runs inside one
  * `db.transaction` while blob writes happen *before* it — a rolled-back
@@ -52,26 +46,19 @@ import { access, copyFile, mkdtemp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { humanActor } from '../../events/envelope'
-import {
-  prepareEventWrite as validateEventWrite,
-  type AbEvent,
-  type EventEnvelope,
-  type EventWrite,
-} from '../../events/catalog'
-import { eventPayloadSchemas, type EventType } from '../../events/payloads'
-import {
-  prepareRepositoryEventWrite as validateRepositoryEventWrite,
-  type RepositoryEvent,
-  type RepositoryEventEnvelope,
-  type RepositoryEventType,
-  type RepositoryEventWrite,
+import type { AbEvent, EventEnvelope, EventWrite } from '../../events/catalog'
+import type { EventType } from '../../events/payloads'
+import type {
+  RepositoryEvent,
+  RepositoryEventEnvelope,
+  RepositoryEventType,
+  RepositoryEventWrite,
 } from '../../events/repository'
-import {
-  validateSessionEventWrite,
-  type SessionEvent,
-  type SessionEventEnvelope,
-  type SessionEventType,
-  type SessionEventWrite,
+import type {
+  SessionEvent,
+  SessionEventEnvelope,
+  SessionEventType,
+  SessionEventWrite,
 } from '../../events/sessions'
 import { createBuildScopedStore } from '../build-scope'
 import type { ReducerSnapshot, ReducerValueScope, RollupScope, SnapshotScope } from '../snapshots'
@@ -81,17 +68,9 @@ import {
   ROLLUP_LEASE_WAIT_MS,
   RollupLeaseLostError,
   RollupLeaseTimeoutError,
-  readRollupValue,
-  type RollupAdvance,
-  type RollupStorage,
-} from '../rollups'
-import { validateCreatedEvent } from '../new-build'
+} from '../rollup-lease'
+import type { RollupAdvance, RollupStorage } from '../rollups'
 import { createSessionScopedStore } from '../session-handle'
-import {
-  REPOSITORY_STATE_EVENT_TYPES,
-  REPOSITORY_LATEST_EVENT_TYPES,
-  readRepoStateEventsWithAnchorRecheck,
-} from '../repo-state-events'
 import {
   DEFAULT_ARTIFACT_RETENTION_MAX_REVISIONS,
   isRetentionManagedKind,
@@ -99,7 +78,6 @@ import {
 } from '../retention'
 import { pollingSubscribe } from '../subscribe'
 import { StreamLocks } from '../streams/lock'
-import { assembleUIMessageDocument } from '../streams/assemble'
 import { EVENT_WAIT_POLL_MS, readEventsWithWait, readStreamWithWait } from '../streams/wait'
 import {
   serializedBatchSize,
@@ -150,19 +128,23 @@ import {
   HEAD as ASSET_HEAD,
   NEXT_NAME_SAME_KIND as ASSET_NEXT_NAME_SAME_KIND,
 } from './ticket-asset-heads'
-import {
-  DEFAULT_TICKET_ASSET_LIMITS,
-  loadTicketAsset,
-  storeTicketAssetBlobs,
-  resolvePinnedAsset,
-  summarizeTicketAsset,
-  validateTicketAssetInput,
-  type TicketAsset,
-  type TicketAssetInput,
-  type TicketAssetLimits,
-  type TicketAssetMeta,
-  type TicketAssetSummary,
+import type {
+  TicketAsset,
+  TicketAssetInput,
+  TicketAssetLimits,
+  TicketAssetMeta,
+  TicketAssetSummary,
 } from '../ticket-assets'
+import {
+  buildDigests,
+  payloadSchemas,
+  reducedValues,
+  repositoryStateEvents,
+  rollups,
+  streamAssembly,
+  ticketAssetCapability,
+  writeValidation,
+} from './capabilities'
 import { DirBlobStore } from './blobs'
 import {
   artifacts,
@@ -966,6 +948,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async createBuild(input: NewBuildInput): Promise<BuildRecord> {
+    const { validateCreatedEvent } = writeValidation.value ?? (await writeValidation.load())
     const created = validateCreatedEvent(input)
     const ts = this.now()
     return this.writeTx(() => {
@@ -1074,6 +1057,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async getNodeRewrite(slug: string, previous?: string, beforePrevious?: string) {
+    const { eventPayloadSchemas } = payloadSchemas.value ?? (await payloadSchemas.load())
     this.requireBuild(slug)
     const row = (
       beforePrevious !== undefined
@@ -1100,6 +1084,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async listOpenBuilds(repo: string): Promise<OpenBuild[]> {
+    const { readPersistedBuildDigests } = buildDigests.value ?? (await buildDigests.load())
     const records = this.db
       .select({ build: builds })
       .from(openBuilds)
@@ -1113,6 +1098,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async getRepoBuildDigests(repo: string): Promise<Map<string, BuildDigest>> {
+    const { readPersistedBuildDigests } = buildDigests.value ?? (await buildDigests.load())
     return readPersistedBuildDigests(
       this,
       repo,
@@ -1169,6 +1155,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async append<T extends EventType>(slug: string, event: EventWrite<T>): Promise<EventEnvelope<T>> {
+    const { validateEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const validated = validateEventWrite(event)
     return this.writeTx(() => this.appendInTx(slug, validated)) as EventEnvelope<T>
   }
@@ -1178,6 +1165,7 @@ export class SqliteBuildStore implements BuildStore {
     expectedSeq: number,
     event: EventWrite<T>,
   ): Promise<EventEnvelope<T> | null> {
+    const { validateEventWrite } = writeValidation.value ?? (await writeValidation.load())
     validateExpectedSeq(expectedSeq)
     const validated = validateEventWrite(event)
     return this.writeTx(() => {
@@ -1306,6 +1294,7 @@ export class SqliteBuildStore implements BuildStore {
     artifactInputs: ArtifactInput[],
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] }> {
+    const { validateEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const prepared: PreparedArtifact[] = []
     for (const input of artifactInputs) {
       prepared.push(await this.prepareArtifact(input))
@@ -1339,6 +1328,7 @@ export class SqliteBuildStore implements BuildStore {
     artifactInputs: ArtifactInput[],
     makeEvent: (deposited: ArtifactMeta[]) => EventWrite<T>,
   ): Promise<{ event: EventEnvelope<T>; artifacts: ArtifactMeta[] } | null> {
+    const { validateEventWrite } = writeValidation.value ?? (await writeValidation.load())
     validateExpectedSeq(expectedSeq)
     const prepared: PreparedArtifact[] = []
     for (const input of artifactInputs) {
@@ -1707,6 +1697,7 @@ export class SqliteBuildStore implements BuildStore {
     repo: string,
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T>> {
+    const { validateRepositoryEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const validated = validateRepositoryEventWrite(event)
     return this.writeTx(() => this.appendRepoInTx(repo, validated)) as RepositoryEventEnvelope<T>
   }
@@ -1716,6 +1707,7 @@ export class SqliteBuildStore implements BuildStore {
     expectedSeq: number,
     event: RepositoryEventWrite<T>,
   ): Promise<RepositoryEventEnvelope<T> | null> {
+    const { validateRepositoryEventWrite } = writeValidation.value ?? (await writeValidation.load())
     validateExpectedSeq(expectedSeq)
     const validated = validateRepositoryEventWrite(event)
     return this.writeTx(() => {
@@ -1781,6 +1773,7 @@ export class SqliteBuildStore implements BuildStore {
     event: RepositoryEventEnvelope<T>
     artifacts: RepositoryArtifactMeta[]
   }> {
+    const { validateRepositoryEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const prepared: PreparedArtifact[] = []
     for (const input of artifactInputs) {
       prepared.push(await this.prepareArtifact(input))
@@ -1911,10 +1904,25 @@ export class SqliteBuildStore implements BuildStore {
     scope: ReducerValueScope,
     request: ReducerValueRequest,
   ): Promise<ReducerValue> {
-    if (scope.kind === 'rollup') return readRollupValue(scope, request, this.rollupStorage(scope))
-    // Reject invalid requests before touching storage.
-    resolveReducerValue(scope, request)
-    return readReducerValue(scope, request, {
+    if (scope.kind === 'rollup') {
+      const { readRollupValue } = rollups.value ?? (await rollups.load())
+      return readRollupValue(scope, request, this.rollupStorage(scope))
+    }
+    const {
+      parseValueRequest,
+      resolveRegisteredValue,
+      readResolvedReducerValue,
+      loadValueRegistration,
+    } = reducedValues.value ?? (await reducedValues.load())
+    // Reject invalid requests before touching storage. Only the requested
+    // reducer's registration initializes.
+    const parsed = parseValueRequest(request)
+    const resolved = resolveRegisteredValue(
+      scope,
+      parsed,
+      await loadValueRegistration(parsed.reducer),
+    )
+    return readResolvedReducerValue(resolved, {
       highWater: async () => {
         const tail = this.snapshotTail(scope)
         if (tail === undefined) throw new Error('unknown reducer scope')
@@ -2231,6 +2239,11 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async getRepoStateEvents(repo: string): Promise<RepositoryEvent[]> {
+    const {
+      REPOSITORY_STATE_EVENT_TYPES,
+      REPOSITORY_LATEST_EVENT_TYPES,
+      readRepoStateEventsWithAnchorRecheck,
+    } = repositoryStateEvents.value ?? (await repositoryStateEvents.load())
     this.requireRepo(repo)
     // Two queries, mirroring the oracle's derivation: the latest
     // run-started anchor, then one select of durable types plus the tail
@@ -2368,6 +2381,8 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async ticketAssetLimits(_repo: string): Promise<TicketAssetLimits> {
+    const { DEFAULT_TICKET_ASSET_LIMITS } =
+      ticketAssetCapability.value ?? (await ticketAssetCapability.load())
     return { ...DEFAULT_TICKET_ASSET_LIMITS }
   }
 
@@ -2390,6 +2405,8 @@ export class SqliteBuildStore implements BuildStore {
     ticketId: string,
     asset: TicketAssetInput,
   ): Promise<TicketAssetMeta> {
+    const { validateTicketAssetInput, storeTicketAssetBlobs } =
+      ticketAssetCapability.value ?? (await ticketAssetCapability.load())
     const size = validateTicketAssetInput(asset)
     const entries = await storeTicketAssetBlobs(this.blobs, asset.entries)
     return this.writeTx(() => {
@@ -2424,6 +2441,7 @@ export class SqliteBuildStore implements BuildStore {
     name: string,
     rev?: number,
   ): Promise<TicketAsset | null> {
+    const { loadTicketAsset } = ticketAssetCapability.value ?? (await ticketAssetCapability.load())
     const scoped = ticketAssetKey(repo, ticketId, kind, name)
     const row =
       rev === undefined
@@ -2449,6 +2467,8 @@ export class SqliteBuildStore implements BuildStore {
     name: string,
     rev?: number,
   ): Promise<TicketAsset | null> {
+    const { resolvePinnedAsset } =
+      ticketAssetCapability.value ?? (await ticketAssetCapability.load())
     return resolvePinnedAsset(this, slug, kind, name, rev)
   }
 
@@ -2457,6 +2477,8 @@ export class SqliteBuildStore implements BuildStore {
     ticketId: string,
     opts?: { revisions?: boolean },
   ): Promise<TicketAssetSummary[]> {
+    const { summarizeTicketAsset } =
+      ticketAssetCapability.value ?? (await ticketAssetCapability.load())
     if (opts?.revisions) {
       return this.db
         .select()
@@ -2571,6 +2593,7 @@ export class SqliteBuildStore implements BuildStore {
     completion: RepoTickCompletion,
     events: RepositoryEventWrite[],
   ): Promise<RepoTickFinish | null> {
+    const { validateTickFinish } = writeValidation.value ?? (await writeValidation.load())
     const validated = validateTickFinish(holder, completion, events)
     return this.writeTx(() => {
       const row = this.requireRepo(repo)
@@ -2718,6 +2741,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async createSession(input: NewSessionInput): Promise<SessionRecord> {
+    const { validateSessionEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const operator = normalizeOperator(input.operator)
     if (!input.repo) throw new Error('repo is required')
     const ts = this.now()
@@ -2789,6 +2813,7 @@ export class SqliteBuildStore implements BuildStore {
     id: string,
     event: SessionEventWrite<T>,
   ): Promise<SessionEventEnvelope<T>> {
+    const { validateSessionEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const validated = validateSessionEventWrite(event)
     return this.writeTx(() => this.appendSessionInTx(id, validated) as SessionEventEnvelope<T>)
   }
@@ -2798,6 +2823,7 @@ export class SqliteBuildStore implements BuildStore {
     expectedSeq: number,
     event: SessionEventWrite<T>,
   ): Promise<SessionEventEnvelope<T> | null> {
+    const { validateSessionEventWrite } = writeValidation.value ?? (await writeValidation.load())
     validateExpectedSeq(expectedSeq)
     const validated = validateSessionEventWrite(event)
     return this.writeTx(() => {
@@ -2886,6 +2912,7 @@ export class SqliteBuildStore implements BuildStore {
     artifactInputs: ArtifactInput[],
     makeEvent: (deposited: SessionArtifactMeta[]) => SessionEventWrite<T>,
   ): Promise<{ event: SessionEventEnvelope<T>; artifacts: SessionArtifactMeta[] }> {
+    const { validateSessionEventWrite } = writeValidation.value ?? (await writeValidation.load())
     const prepared: PreparedArtifact[] = []
     for (const input of artifactInputs) {
       prepared.push(await this.prepareArtifact(input))
@@ -3136,6 +3163,7 @@ export class SqliteBuildStore implements BuildStore {
   }
 
   async closeStream(streamId: string, outcome: StreamOutcome): Promise<StreamRecord> {
+    const { assembleUIMessageDocument } = streamAssembly.value ?? (await streamAssembly.load())
     // The per-stream mutex holds across the entire prepare→commit loop
     // (AUT-348): a same-process append issued during this close waits for it
     // to finish and then rejects on the closed check with StreamClosedError.

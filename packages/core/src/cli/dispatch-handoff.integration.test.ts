@@ -682,3 +682,191 @@ test('conditional rollback acknowledgement follows local retention on an unchang
   expect((await check()).rollbackRetained).toBe(false)
   expect(reads).toBe(1)
 })
+
+test('reader modules statically reach none of the capabilities they do not use', async () => {
+  const { reachedExclusions } = await import('../testing/import-graph')
+  const boundaries: Record<string, string[]> = {
+    // The install probe and every reader's entry cost.
+    'cli/dispatch-handoff.ts': [
+      'store/local/store.ts',
+      'store/remote/client.ts',
+      'store/remote/released-reducer-values/',
+      'kernel/reducer-registry.ts',
+      'events/payloads.ts',
+      'events/catalog.ts',
+      'events/repository.ts',
+      'config/schema.ts',
+      'ports/workspace/git-worktree.ts',
+      'store/streams/assemble.ts',
+    ],
+    // The light local store.
+    'store/local/store.ts': [
+      'kernel/reducer-registry.ts',
+      'store/reducer-values.ts',
+      'store/rollups.ts',
+      'events/payloads.ts',
+      'events/catalog.ts',
+      'events/repository.ts',
+      'events/sessions.ts',
+      'store/streams/assemble.ts',
+      'store/remote/client.ts',
+    ],
+    // Store composition for a journal-backed reader.
+    'cli/production-store.ts': [
+      'store/remote/client.ts',
+      'cli/repo-state.ts',
+      'cli/configured-store.ts',
+      'config/schema.ts',
+      'cli/env.ts',
+    ],
+    // Selective reducer lookup never needs the complete catalog.
+    'kernel/reducer-value-index.ts': [
+      'kernel/reducer-registry.ts',
+      'kernel/read-facts.ts',
+      'store/reducer-values.ts',
+    ],
+    'kernel/reducer-value-entry.ts': [
+      'kernel/reducer-registry.ts',
+      'kernel/read-facts.ts',
+      'store/reducer-values.ts',
+    ],
+    'store/reducer-value-read.ts': [
+      'kernel/reducer-registry.ts',
+      'kernel/read-facts.ts',
+      'store/reducer-values.ts',
+    ],
+    'kernel/repository-read-facts.ts': ['kernel/read-facts.ts', 'kernel/reducer-registry.ts'],
+  }
+  const reached = Object.entries(boundaries).flatMap(([entry, excluded]) =>
+    reachedExclusions(entry, excluded),
+  )
+  expect(reached).toEqual([])
+})
+
+test('a fresh reader process initializes only the capabilities its operation requests', async () => {
+  const { DISPATCHER } = await import('../events/envelope')
+  const { readUpgradeProjection, readGenerationJournal } = await import('./dispatch-handoff')
+  const repo = await mkdtemp(join(tmpdir(), 'ab-reader-modules-'))
+  const storeRef = join(repo, '.autobuild/store')
+  const seed = openLocalStore(storeRef)
+  await seed.ensureRepo(repo)
+  await seed.close()
+  const launch = {
+    version: 1 as const,
+    runtimeRoot: '/old',
+    checkout: repo,
+    run: 'old',
+    lineage: 'launcher',
+    journal: { repo, storeRef },
+  }
+  const env: Record<string, string> = {}
+  for (const [key, value] of Object.entries(process.env))
+    if (value !== undefined && !key.startsWith('AB_')) env[key] = value
+  const src = join(import.meta.dir, '..')
+  const reader = async (operation: string, input: unknown) => {
+    const script = `
+      const reader = await import(${JSON.stringify(join(import.meta.dir, 'dispatch-handoff.ts'))})
+      const { operation, launch } = JSON.parse(process.env.READER_CASE)
+      const result =
+        operation === 'handoff'
+          ? await reader.readHandoff(launch, ['dispatch'], {})
+          : operation === 'journal'
+            ? await reader.readGenerationJournal(launch, ['dispatch'], {})
+            : await reader.readUpgradeProjection(launch, ['dispatch'], {}, {
+                condition: { version: 1, identity: 'fresh' },
+              })
+      const src = ${JSON.stringify(`${src}/`)}
+      const loaded = Object.keys(require.cache)
+        .filter((key) => key.startsWith(src))
+        .map((key) => key.slice(src.length))
+      console.log(JSON.stringify({ result: result ?? null, loaded }))
+    `
+    const proc = Bun.spawn([process.execPath, '-e', script], {
+      cwd: repo,
+      env: { ...env, READER_CASE: JSON.stringify({ operation, launch: input }) },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    })
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ])
+    expect(code, stderr).toBe(0)
+    return JSON.parse(stdout.trim()) as { result: unknown; loaded: string[] }
+  }
+  const absent = (loaded: string[], excluded: string[]) =>
+    loaded.filter((path) =>
+      excluded.some((name) => (name.endsWith('/') ? path.startsWith(name) : path === name)),
+    )
+  const configModules = ['config/schema.ts', 'cli/repo-state.ts', 'cli/sessionless-store.ts']
+  const writeValidators = [
+    'events/catalog.ts',
+    'events/sessions.ts',
+    'store/new-build.ts',
+    'store/repo-tick.ts',
+  ]
+  const unrequested = [
+    'kernel/reducer-registry.ts',
+    'kernel/read-facts.ts',
+    'kernel/reducer.ts',
+    'store/rollups.ts',
+    'store/ticket-assets.ts',
+    'store/digest.ts',
+    'store/session-reducer.ts',
+    'cli/dashboard/',
+    'processes/publication-state.ts',
+    'store/streams/assemble.ts',
+    'store/remote/client.ts',
+    'ports/workspace/git-worktree.ts',
+    ...configModules,
+    ...writeValidators,
+  ]
+
+  // The install probe names no run or lineage, so it opens no store.
+  const probe = await reader('handoff', { ...launch, run: undefined, lineage: undefined })
+  expect(probe.result).toBeNull()
+  expect(probe.loaded).not.toContain('store/local/store.ts')
+
+  const journal = await reader('journal', launch)
+  expect(journal.result).toEqual(await readGenerationJournal(launch, ['dispatch'], {}))
+  expect(journal.loaded).toContain('store/local/store.ts')
+  expect(
+    absent(journal.loaded, [...unrequested, 'store/reducer-value-read.ts', 'events/payloads.ts']),
+  ).toEqual([])
+
+  const condition = { condition: { version: 1 as const, identity: 'fresh' } }
+  const unprepared = await reader('upgrade', launch)
+  expect(unprepared.result).toEqual(
+    await readUpgradeProjection(launch, ['dispatch'], {}, condition),
+  )
+  expect(unprepared.loaded).toContain('kernel/dispatch-upgrade.ts')
+  expect(absent(unprepared.loaded, [...unrequested, 'kernel/repository-read-facts.ts'])).toEqual([])
+
+  const cacheId = `2.0.0-${'c'.repeat(64)}`
+  const runtime = {
+    version: '1.0.0',
+    commit: 'unknown',
+    source: { kind: 'package' as const, location: '/old' },
+  }
+  const writer = openLocalStore(storeRef)
+  await writer.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.target-prepared',
+    payload: {
+      run: 'old',
+      lineage: 'launcher',
+      correlation: 'h',
+      from: runtime,
+      to: { ...runtime, version: '2.0.0' },
+      root: join(repo, '.autobuild/runtime', cacheId, 'distribution'),
+      cacheId,
+      target: { mode: 'installed' as const, key: 'two', source: '/install' },
+    },
+  })
+  await writer.close()
+  const prepared = await reader('upgrade', launch)
+  expect(prepared.result).toEqual(await readUpgradeProjection(launch, ['dispatch'], {}, condition))
+  expect(prepared.loaded).toContain('kernel/repository-read-facts.ts')
+  expect(absent(prepared.loaded, unrequested)).toEqual([])
+}, 60_000)
