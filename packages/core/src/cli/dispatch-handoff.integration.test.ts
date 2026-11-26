@@ -523,13 +523,24 @@ test('conditional helpers refresh durable facts and revalidate target files with
         },
       ),
     )
-  expect((await check()).handoff).toBeNull()
+  const { to: _to, root: _root, cacheId: _cacheId, ...detected } = handoff
+  await store.appendRepo(repo, {
+    actor: DISPATCHER,
+    type: 'dispatcher.upgrade-detected',
+    payload: detected,
+  })
+  const preparing = await check()
+  expect(preparing.handoff).toBeNull()
+  // The outstanding preparation is advisory pacing input only.
+  expect(preparing.preparing).toBe('h')
   // An append after sampling cannot be acknowledged by this older position.
   injectAppend = true
   queryIdentity = 'fresh-reader'
   expect((await check()).handoff).toBeNull()
   calls.length = 0
-  expect((await check()).handoff).toBeNull()
+  const prepared = await check()
+  expect(prepared.handoff).toBeNull()
+  expect(prepared.preparing).toBeUndefined()
   expect(calls).toContain('getReducerValue')
   await mkdir(root, { recursive: true })
   await writeFile(join(root, 'tsconfig.json'), '{}\n')
@@ -540,7 +551,9 @@ test('conditional helpers refresh durable facts and revalidate target files with
     )
   await writeIdentity(cacheId)
   calls.length = 0
-  expect((await check()).handoff).toEqual(handoff)
+  const ready = await check()
+  expect(ready.handoff).toEqual(handoff)
+  expect(ready.preparing).toBeUndefined()
   expect(calls).toEqual(['getRepoChangePosition'])
   await writeIdentity('wrong')
   calls.length = 0

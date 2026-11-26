@@ -315,7 +315,12 @@ manufacturing durable facts. Errors discard conditional state; an unloadable
 target still uses the healthy predecessor reader with the active query. The
 launcher retains its filesystem/process-only boundary and polling cadence of
 1 second idle or 250 ms pending, processing child exits and pending actions on
-cached answers too. Legacy peers remain functional with full reads.
+cached answers too. While the active run has a durably detected upgrade with no
+prepared target, failure, yield request or handoff yet, the reader reports that
+correlation as advisory `preparing`, and the launcher checks every 50 ms for at
+most 600 checks per detection before returning to the idle cadence. Readers
+that omit the field keep the ordinary cadence; operator shutdown ends any
+pause. Legacy peers remain functional with full reads.
 
 The launcher observes presentation stop/continue liveness so Ctrl-Z returns the
 shell prompt and `fg` resumes only the presentation; the kernel keeps running.
