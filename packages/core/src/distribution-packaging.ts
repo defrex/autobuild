@@ -62,12 +62,34 @@ async function execOrThrow(
  * while the repo manifest keeps it for workspace installs. */
 const packedManifestOmittedFields = ['patchedDependencies', 'devDependencies'] as const
 
+/** Gzip level for an archive that is extracted at once and discarded, never
+ * stored or sent anywhere (the packaged source fingerprint). Its compressed
+ * bytes are pure overhead: level 0 keeps valid gzip framing for `tar -xzf`
+ * while spending no CPU on deflate, which at Bun's default level 9 dominates
+ * the pack. */
+export const SCRATCH_ARCHIVE_GZIP_LEVEL = 0
+
+/** Gzip level for a locally prepared runtime archive, kept under `.autobuild`
+ * and possibly uploaded to a guest. Level 2 packs in well under half the time
+ * of the default level 9 for an archive only slightly larger, so dispatcher
+ * starts and upgrade handoffs stop paying maximum deflate effort. Its own
+ * digest is taken from the bytes it produces. */
+export const RUNTIME_ARCHIVE_GZIP_LEVEL = 2
+
+/** Packs `root`'s `files` set with `bun pm pack`. `options.gzipLevel` (an
+ * integer 0–9) sets the archive's deflate effort; omitted, Bun's default
+ * applies and the command is unchanged. The level changes compressed bytes
+ * only, never the extracted contents. */
 export async function packageDistribution(
   root: string,
   exec: PackagingExec = spawnExec,
   signal?: AbortSignal,
   filesystem: { mkdtemp(prefix: string): Promise<string>; rm: typeof rm } = { mkdtemp, rm },
+  options: { gzipLevel?: number } = {},
 ): Promise<Uint8Array> {
+  const { gzipLevel } = options
+  if (gzipLevel !== undefined && (!Number.isInteger(gzipLevel) || gzipLevel < 0 || gzipLevel > 9))
+    throw new Error('gzip level must be an integer from 0 to 9')
   const staging = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
   let destination: string | undefined
   let failure: unknown
@@ -106,7 +128,15 @@ export async function packageDistribution(
     for (const field of packedManifestOmittedFields) delete manifest[field]
     await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     await execOrThrow(
-      ['bun', 'pm', 'pack', '--ignore-scripts', '--destination', destination],
+      [
+        'bun',
+        'pm',
+        'pack',
+        '--ignore-scripts',
+        ...(gzipLevel === undefined ? [] : ['--gzip-level', String(gzipLevel)]),
+        '--destination',
+        destination,
+      ],
       staging,
       exec,
       signal,
