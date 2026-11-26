@@ -6,6 +6,12 @@ import { join } from 'node:path'
 import { cellWidth } from '../packages/core/src/cli/dashboard/cells'
 import type { PipelineStep } from '../packages/core/src/cli/dashboard/model'
 import { stripAnsi } from '../packages/core/src/cli/dashboard/render'
+import { buildRowStatus } from '../packages/core/src/cli/dashboard/row-text'
+import {
+  BUILD_STATUS_TONE,
+  HARVEST_STATUS_TONE,
+  harvestStatusText,
+} from '../packages/core/src/cli/dashboard/vocabulary'
 import { spawnExec } from '../packages/core/src/ports/workspace/git-worktree'
 import { projectWebParity } from '../packages/hosted-store-service/app/dashboard/view-model'
 import {
@@ -135,6 +141,9 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'handoff-wide',
     'handoff-narrow',
     'parked-slot-wait-wide',
+    'status-vocabulary-wide',
+    'harvest-escalated-wide',
+    'harvest-failed-wide',
     'harvest-suspended-wide',
     'harvest-suspended-narrow',
     'capacity-wide',
@@ -187,6 +196,37 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     'web-url-viewer-detail',
     'web-url-narrow',
   ])
+  // SPEC §14 "Status words": a build row is green exactly when it holds a
+  // slot, the active counter counts the green rows, and the captures render
+  // the whole vocabulary between them.
+  const words = new Set<string>()
+  for (const frame of first.result.frames) {
+    const model = frame.model
+    let green = 0
+    for (const build of model.builds) {
+      const status = buildRowStatus(build)
+      words.add(status.word)
+      expect({ frame: frame.id, slug: build.slug, slot: build.slot?.state }).toEqual({
+        frame: frame.id,
+        slug: build.slug,
+        slot: status.tone === 'ok' ? 'held' : expect.stringMatching(/^(none|requested)$/),
+      })
+      if (status.tone === 'ok') green++
+    }
+    if (model.harvest) words.add(`harvest ${harvestStatusText(model.harvest.status).word}`)
+    expect({ frame: frame.id, active: model.active.current }).toEqual({
+      frame: frame.id,
+      active: green,
+    })
+    expect(frame.text).not.toContain('RESUMING')
+  }
+  expect([...words].sort()).toEqual(
+    [
+      ...Object.keys(BUILD_STATUS_TONE),
+      ...Object.keys(HARVEST_STATUS_TONE).map((word) => `harvest ${word}`),
+    ].sort(),
+  )
+
   const report = await readFile(first.result.reportPath, 'utf8')
   expect(report).toContain('# Dashboard visual verification')
   expect(report).toContain('headline-happy-wide.png')
@@ -197,7 +237,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(report).toContain('mixed-narrow.txt')
   expect(report).toContain('- [ ] Every PNG opens and is non-empty.')
   expect(report).toContain(
-    '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining QUEUED.',
+    '- [ ] Both mixed frames show repository PAUSED and CAP-QUEUED as (held) while retaining STARTING.',
   )
   expect(report).toContain('unicode-transcript.png')
   expect(report).toContain('resume-prompt.png')
@@ -392,6 +432,15 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     } else if (frame.id === 'resume-prompt') {
       expect(frame.text).toContain('Build  plan-blocked-dashboard')
       expect(frame.text).toContain('BLOCKED')
+    } else if (frame.id === 'status-vocabulary-wide') {
+      expect(frame.text).toMatch(/ABORTING\n.*abort requested; waiting for running work to stop/)
+      expect(frame.text).toContain('(merge decision) WAITING')
+      expect(frame.text).toContain('MERGING')
+    } else if (
+      frame.id.startsWith('harvest-escalated-') ||
+      frame.id.startsWith('harvest-failed-')
+    ) {
+      expect(frame.model.harvest?.status).toBe(frame.id.split('-')[1])
     } else if (frame.id.startsWith('harvest-suspended-')) {
       expect(frame.text).toContain('SUSPENDED')
       expect(frame.text).not.toContain('synthesize[>]')
@@ -463,6 +512,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
       !frame.id.startsWith('harvest-suspended-') &&
       !frame.id.startsWith('handoff-') &&
       frame.id !== 'parked-slot-wait-wide' &&
+      frame.id !== 'status-vocabulary-wide' &&
       frame.id !== 'ticket-wait-detail' &&
       frame.id !== 'optimization-node-detail' &&
       !frame.id.startsWith('rollback-') &&
@@ -481,7 +531,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
   expect(headline).toContain('triage 2 | queue')
   expect(headline).toContain('active 5/6')
   expect(headline).not.toMatch(/observations \d+\/\d+/)
-  expect(headline).toMatch(/Harvest\s+3 observations\s+RUNNING/)
+  expect(headline).toMatch(/Harvest\s+3 observations\s+HARVESTING/)
   expect(headline).toMatch(/\[x\] scan\([^)]*\) \[>\] synthesize/)
   expect(headline).toMatch(/AUT-136[\s\S]*?\[>\] plan/)
   expect(headline).toMatch(/AUT-134[\s\S]*?\[>\] implement/)
@@ -513,7 +563,7 @@ test('scripted dispatch capture is deterministic, mixed-state, paired, and sourc
     const mixed = first.result.frames.find((frame) => frame.id === id)!.text
     expect(mixed).toContain('repository PAUSED')
     expect(mixed).toContain('CAP-QUEUED')
-    expect(mixed).toMatch(/CAP-QUEUED.*\(held\)\s+QUEUED/)
+    expect(mixed).toMatch(/CAP-QUEUED.*\(held\)\s+STARTING/)
   }
   expect(first.result.frames.find((frame) => frame.id === 'mixed-narrow')!.text).toContain('~')
   for (const id of ['mixed-wide', 'mixed-narrow']) {
