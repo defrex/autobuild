@@ -32,6 +32,7 @@ import { authorizeRemoteHandoffs, recoverDispatchDrain } from '../kernel/dispatc
 import { distributionRoot } from '../distribution'
 import { readDistributionIdentity } from './installation'
 import { launchContext } from './dispatch-launch-contract'
+import { observeYield, watchForYieldRequest } from './dispatch-yield-observer'
 import { DispatchUpgradeController } from './dispatch-upgrade-controller'
 import { resolveUpgradeTarget } from './dispatch-upgrade-target'
 import { prepareUpgrade } from './dispatch-upgrade-install'
@@ -1510,6 +1511,8 @@ class DispatchLoop {
 
   private dispatcherTick(resumeCurrent: boolean): Promise<Awaited<ReturnType<Dispatcher['tick']>>> {
     return this.serialize(async () => {
+      // The yield observer may have accepted while this tick was queued.
+      if (this.retirement !== undefined) return emptyTickReport()
       // Refresh before every watch decision. The owner publishes atomically;
       // everything below captures the resulting one snapshot for this tick.
       await this.flushPendingTickFailure()
@@ -4829,6 +4832,16 @@ class DispatchLoop {
       request.lineage !== launch.lineage ||
       !this.currentConfig().config.upgrade.automatic
     ) {
+      // A prepared target still awaiting its request: observe for it between
+      // ticks. Arming reuses the read above and never accepts by itself.
+      if (
+        state?.prepared &&
+        state.prepared.payload.lineage === launch.lineage &&
+        !state.failure &&
+        !state.handoff &&
+        !state.request
+      )
+        this.armYieldObservation(state.prepared.payload.correlation, launch.lineage)
       this.abandonUpgradeYield()
       return false
     }
@@ -4936,6 +4949,59 @@ class DispatchLoop {
       return false
     }
     return this.adoptUpgradeYield(accepted)
+  }
+
+  private yieldObservation?: { correlation: string; stop: AbortController }
+  /** A preparation observed to its step limit is left to ordinary ticks, so
+   * re-arming from a tick cannot extend the observation indefinitely. */
+  private exhaustedYieldObservation?: string
+
+  /** While this run has a prepared target outstanding, observe durable state
+   * for its yield request between ticks at a bounded cadence, and attempt
+   * acceptance through the same serialization as ticks. The observation only
+   * decides when to call `acceptUpgradeYield()`, which re-reads and validates
+   * durable state; ordinary tick cadence is unchanged. */
+  private armYieldObservation(correlation: string, lineage: string): void {
+    if (
+      this.opts.once === true ||
+      this.watchStopped ||
+      this.superseded ||
+      this.retirement !== undefined
+    )
+      return
+    if (
+      this.yieldObservation?.correlation === correlation ||
+      this.exhaustedYieldObservation === correlation
+    )
+      return
+    this.yieldObservation?.stop.abort()
+    const stop = new AbortController()
+    const observation = { correlation, stop }
+    this.yieldObservation = observation
+    // The sleep and the cancellation listen to the same stop sources, so an
+    // interrupted sleep never becomes a back-to-back read.
+    const signals = [stop.signal, this.opts.signal, this.inputStop.signal].filter(
+      (signal): signal is AbortSignal => signal !== undefined,
+    )
+    void watchForYieldRequest({
+      observe: () =>
+        observeYield(this.wiring.store, this.repoIdentity, this.runId, correlation, lineage),
+      accept: () =>
+        this.serialize(async () => {
+          if (this.retirement !== undefined || this.watchStopped || this.superseded) return
+          await this.refreshConfig()
+          await this.acceptUpgradeYield()
+        }),
+      sleep: (ms) => interruptibleSleep(ms, signals),
+      signal: AbortSignal.any(signals),
+    })
+      .then((outcome) => {
+        if (outcome === 'exhausted') this.exhaustedYieldObservation = correlation
+      })
+      .catch(() => {})
+      .finally(() => {
+        if (this.yieldObservation === observation) this.yieldObservation = undefined
+      })
   }
 
   /** Repository authority may transfer only from a current holder. A record
@@ -5245,6 +5311,7 @@ class DispatchLoop {
             type: 'dispatcher.target-prepared',
             payload: handoff,
           })
+          this.armYieldObservation(handoff.correlation, launch.lineage!)
           return true
         }),
     })
@@ -5383,6 +5450,7 @@ class DispatchLoop {
       }
     } finally {
       this.localHarvestShutdown.abort()
+      this.yieldObservation?.stop.abort()
       await this.upgradeController?.stop()
       await this.stopHooks()
       if (this.retirement) {
