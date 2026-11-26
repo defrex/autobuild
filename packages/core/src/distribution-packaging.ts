@@ -76,21 +76,54 @@ export const SCRATCH_ARCHIVE_GZIP_LEVEL = 0
  * digest is taken from the bytes it produces. */
 export const RUNTIME_ARCHIVE_GZIP_LEVEL = 2
 
+function packedFiles(manifest: Record<string, unknown>): string[] {
+  const files = manifest.files
+  if (!Array.isArray(files) || files.some((entry) => typeof entry !== 'string')) {
+    throw new Error(
+      'Autobuild packaging requires the root package.json to list its files as an array of paths',
+    )
+  }
+  return files as string[]
+}
+
 /** Packs `root`'s `files` set with `bun pm pack`. `options.gzipLevel` (an
  * integer 0–9) sets the archive's deflate effort; omitted, Bun's default
  * applies and the command is unchanged. The level changes compressed bytes
- * only, never the extracted contents. */
+ * only, never the extracted contents.
+ *
+ * `options.ownedSnapshot` declares `root` a private, caller-owned snapshot
+ * whose manifest is already in packed form: nothing else writes to it during
+ * the pack, and it declares none of `packedManifestOmittedFields`. Such a root
+ * is packed in place, with no staging copy, and the packer never writes inside
+ * it. A manifest that still declares an omitted field is refused rather than
+ * rewritten, so a strip list that drifts from the caller's normalization fails
+ * loudly instead of shipping the field. Without the option, `root` may be a
+ * live source tree and is packed from an isolated staging copy. */
 export async function packageDistribution(
   root: string,
   exec: PackagingExec = spawnExec,
   signal?: AbortSignal,
   filesystem: { mkdtemp(prefix: string): Promise<string>; rm: typeof rm } = { mkdtemp, rm },
-  options: { gzipLevel?: number } = {},
+  options: { gzipLevel?: number; ownedSnapshot?: boolean } = {},
 ): Promise<Uint8Array> {
   const { gzipLevel } = options
   if (gzipLevel !== undefined && (!Number.isInteger(gzipLevel) || gzipLevel < 0 || gzipLevel > 9))
     throw new Error('gzip level must be an integer from 0 to 9')
-  const staging = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
+  if (options.ownedSnapshot) {
+    const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as Record<
+      string,
+      unknown
+    >
+    packedFiles(manifest)
+    for (const field of packedManifestOmittedFields)
+      if (field in manifest)
+        throw new Error(
+          `owned snapshot manifest declares ${field}; normalize it before packing in place`,
+        )
+  }
+  const staging = options.ownedSnapshot
+    ? undefined
+    : await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-staging-'))
   let destination: string | undefined
   let failure: unknown
   let failed = false
@@ -98,35 +131,33 @@ export async function packageDistribution(
   let errors: unknown[] = []
   try {
     destination = await filesystem.mkdtemp(join(tmpdir(), 'autobuild-pack-'))
-    // Pack from a staging copy of the repo's `files` set rather than the repo
-    // root: the packed manifest must differ from the repo manifest (above), and
-    // rewriting the repo manifest in place would leave a window where tracked
-    // files are dirty.
-    const manifestPath = join(root, 'package.json')
-    const manifest = JSON.parse(await readFile(manifestPath, 'utf8')) as Record<string, unknown>
-    const files = manifest.files
-    if (!Array.isArray(files) || files.some((entry) => typeof entry !== 'string')) {
-      throw new Error(
-        'Autobuild packaging requires the root package.json to list its files as an array of paths',
-      )
+    if (staging !== undefined) {
+      // Pack from a staging copy of the repo's `files` set rather than the
+      // repo root: the packed manifest must differ from the repo manifest
+      // (above), and rewriting the repo manifest in place would leave a window
+      // where tracked files are dirty. An owned snapshot skips this copy.
+      const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as Record<
+        string,
+        unknown
+      >
+      for (const entry of packedFiles(manifest)) {
+        // npm `files` entries may be negated globs (for example
+        // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
+        // published package). Only positive entries name a path to stage: the
+        // negations stay in the staged manifest and `bun pm pack` applies them,
+        // so the packed set still excludes those paths.
+        if (entry.startsWith('!')) continue
+        const target = join(staging, entry)
+        await mkdir(dirname(target), { recursive: true })
+        await cp(join(root, entry), target, {
+          recursive: true,
+          errorOnExist: true,
+          force: false,
+        })
+      }
+      for (const field of packedManifestOmittedFields) delete manifest[field]
+      await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     }
-    for (const entry of files as string[]) {
-      // npm `files` entries may be negated globs (for example
-      // `!packages/core/src/**/*.test.ts`, which keeps test files out of the
-      // published package). Only positive entries name a path to stage: the
-      // negations stay in the staged manifest and `bun pm pack` applies them,
-      // so the packed set still excludes those paths.
-      if (entry.startsWith('!')) continue
-      const target = join(staging, entry)
-      await mkdir(dirname(target), { recursive: true })
-      await cp(join(root, entry), target, {
-        recursive: true,
-        errorOnExist: true,
-        force: false,
-      })
-    }
-    for (const field of packedManifestOmittedFields) delete manifest[field]
-    await writeFile(join(staging, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
     await execOrThrow(
       [
         'bun',
@@ -137,7 +168,7 @@ export async function packageDistribution(
         '--destination',
         destination,
       ],
-      staging,
+      staging ?? root,
       exec,
       signal,
     )

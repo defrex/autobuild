@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { treeDigest } from './cli/dispatch-runtime-dependencies'
@@ -196,4 +196,121 @@ test('every boot gzip level extracts the same packaged tree as the default', asy
     if (gzipLevel === SCRATCH_ARCHIVE_GZIP_LEVEL)
       expect(bytes.length).toBeGreaterThan(defaultBytes.length)
   }
+})
+
+test('an owned snapshot packs in place: no staging copy, no writes inside it, destination removed', async () => {
+  const root = await fixture({ name: 'fixture', version: '1.0.0', files: [] })
+  const before = await treeDigest(root)
+  for (const exitCode of [0, 3]) {
+    const allocated: string[] = []
+    let cwd = ''
+    let command: string[] = []
+    const pack = packageDistribution(
+      root,
+      async (cmd, options) => {
+        cwd = options.cwd
+        command = cmd
+        await writeFile(join(cmd.at(-1)!, 'fixture.tgz'), 'archive')
+        return { exitCode, stdout: '', stderr: 'pack failed' }
+      },
+      undefined,
+      {
+        mkdtemp: async (prefix) => {
+          const path = await mkdtemp(prefix)
+          allocated.push(path)
+          return path
+        },
+        rm,
+      },
+      { gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL, ownedSnapshot: true },
+    )
+    if (exitCode === 0) expect(new TextDecoder().decode(await pack)).toBe('archive')
+    else await expect(pack).rejects.toThrow('pack failed')
+    expect(cwd).toBe(root)
+    expect(allocated.length).toBe(1)
+    expect(command).toEqual([
+      'bun',
+      'pm',
+      'pack',
+      '--ignore-scripts',
+      '--gzip-level',
+      String(RUNTIME_ARCHIVE_GZIP_LEVEL),
+      '--destination',
+      allocated[0]!,
+    ])
+    await absent(allocated[0]!)
+    expect(await treeDigest(root)).toBe(before)
+  }
+})
+
+test('an owned snapshot with an unnormalized manifest is refused before any allocation, unchanged', async () => {
+  for (const [manifest, message] of [
+    [{ files: [], devDependencies: { local: 'workspace:*' } }, 'declares devDependencies'],
+    [{ files: [], patchedDependencies: { local: 'patch' } }, 'declares patchedDependencies'],
+    [{ files: 'invalid' }, 'list its files as an array'],
+    [{ files: [1] }, 'list its files as an array'],
+  ] as const) {
+    const root = await fixture(manifest)
+    const bytes = await readFile(join(root, 'package.json'), 'utf8')
+    let allocated = 0
+    await expect(
+      packageDistribution(
+        root,
+        async () => {
+          throw Error('pack must not run')
+        },
+        undefined,
+        {
+          mkdtemp: async () => {
+            allocated++
+            throw Error('must not allocate')
+          },
+          rm,
+        },
+        { ownedSnapshot: true },
+      ),
+    ).rejects.toThrow(message)
+    expect(allocated).toBe(0)
+    expect(await readFile(join(root, 'package.json'), 'utf8')).toBe(bytes)
+  }
+})
+
+test('an owned snapshot packs the same tree as a staged pack and leaves its root unchanged', async () => {
+  const manifest = { name: 'fixture', version: '1.0.0', files: ['src', 'bin', '!src/**/*.test.ts'] }
+  const root = await fixture()
+  // The runtime snapshot writes its normalized manifest in the packer's form.
+  await writeFile(join(root, 'package.json'), `${JSON.stringify(manifest, null, 2)}\n`)
+  await mkdir(join(root, 'src'))
+  await mkdir(join(root, 'bin'))
+  await mkdir(join(root, 'node_modules/dep'), { recursive: true })
+  await writeFile(join(root, 'src/a.ts'), 'export const a = 1\n')
+  await writeFile(join(root, 'src/x.test.ts'), 'excluded\n')
+  await symlink('a.ts', join(root, 'src/alias.ts'))
+  await writeFile(join(root, 'bin/tool.ts'), '#!/usr/bin/env bun\n')
+  await chmod(join(root, 'bin/tool.ts'), 0o755)
+  await writeFile(join(root, 'node_modules/dep/package.json'), '{"name":"dep"}')
+  const before = await treeDigest(root)
+  const unpack = async (bytes: Uint8Array) => {
+    const dir = await mkdtemp(join(tmpdir(), 'ab-pack-extract-'))
+    roots.push(dir)
+    await writeFile(join(dir, 'archive.tgz'), bytes)
+    await mkdir(join(dir, 'tree'))
+    await Bun.$`tar -xzf ${join(dir, 'archive.tgz')} --strip-components=1 -C ${join(dir, 'tree')}`.quiet()
+    return join(dir, 'tree')
+  }
+  const options = { gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL }
+  const staged = await unpack(
+    await packageDistribution(root, undefined, undefined, undefined, options),
+  )
+  const owned = await unpack(
+    await packageDistribution(root, undefined, undefined, undefined, {
+      ...options,
+      ownedSnapshot: true,
+    }),
+  )
+  expect(await treeDigest(owned)).toBe(await treeDigest(staged))
+  await absent(join(owned, 'src/x.test.ts'))
+  await absent(join(owned, 'node_modules'))
+  expect((await stat(join(owned, 'bin/tool.ts'))).mode & 0o111).not.toBe(0)
+  expect(await treeDigest(root)).toBe(before)
 })

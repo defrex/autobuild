@@ -419,8 +419,11 @@ export async function prepareRuntime(
       await validateRuntime(reusable)
       return reusable
     }
+    // `root` is this stage's private `stageCode` snapshot with its manifest
+    // already normalized, so it packs in place without a staging copy.
     const archive = await packageDistribution(root, undefined, undefined, undefined, {
       gzipLevel: RUNTIME_ARCHIVE_GZIP_LEVEL,
+      ownedSnapshot: true,
     })
     const archiveDigest = new Bun.CryptoHasher('sha256').update(archive).digest('hex')
     const extracted = join(stage, 'archive-check')
