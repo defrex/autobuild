@@ -1298,42 +1298,30 @@ readyState = "Ready"
     expect(await h.store.listBuilds()).toHaveLength(3)
   })
 
-  test('capacity counts blocked and paused builds as occupying slots', async () => {
-    // Blocked: an open escalation (§15.5) holds the slot.
-    const blocked = harness({ tickets: [readyTicket('T-1')] })
-    await seedBuild(blocked, { slug: 'stuck' })
-    await blocked.store.append('stuck', {
-      actor: KERNEL,
-      type: 'escalation.raised',
-      payload: {
-        id: 'e_1',
-        phase: 'implement',
-        source: 'stall',
-        question: 'same finding 3 rounds',
-      },
-    })
-    expect(await blocked.dispatcher.tick()).toEqual({
-      ...emptyTickReport(),
-      queued: 1,
-    })
-    expect((await blocked.store.listBuilds()).map((b) => b.slug)).toEqual(['stuck'])
-    expect(blocked.launches).toEqual([])
-    expect(blocked.tickets.comments).toEqual([])
-
-    // Paused: operator instruction (§15.5) also holds the slot.
-    const paused = harness({ tickets: [readyTicket('T-1')] })
-    await seedBuild(paused, { slug: 'parked' })
-    await paused.store.append('parked', {
-      actor: KERNEL,
-      type: 'build.paused',
-      payload: {},
-    })
-    expect(await paused.dispatcher.tick()).toEqual({
-      ...emptyTickReport(),
-      queued: 1,
-    })
-    expect((await paused.store.listBuilds()).map((b) => b.slug)).toEqual(['parked'])
-    expect(paused.launches).toEqual([])
+  test('blocked and paused builds free their slots (SPEC §12 "What holds a slot")', async () => {
+    for (const release of ['blocked', 'paused'] as const) {
+      const h = harness({ tickets: [readyTicket('T-1')] })
+      await seedBuild(h, { slug: 'stuck' })
+      await h.store.append(
+        'stuck',
+        release === 'blocked'
+          ? {
+              actor: KERNEL,
+              type: 'escalation.raised',
+              payload: {
+                id: 'e_1',
+                phase: 'implement',
+                source: 'stall',
+                question: 'same finding 3 rounds',
+              },
+            }
+          : { actor: KERNEL, type: 'build.paused', payload: {} },
+      )
+      // With capacity 1, the ready ticket is claimed while the build waits.
+      await h.dispatcher.tick()
+      expect((await h.store.listBuilds()).map((b) => b.slug).sort()).toHaveLength(2)
+      expect(h.launches).not.toContain('stuck')
+    }
   })
 
   test('nonconforming ticket bounces: Triage transition + comment naming missing parts, no build', async () => {
@@ -6073,14 +6061,22 @@ describe('Dispatcher startup resume', () => {
     })
     const before = await h.store.getEvents(slug)
 
+    // The answered build holds no slot: it is admitted as a resume request
+    // once this tick has evaluated urgent claims, then launched.
     expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
       ...emptyTickReport(),
-      resumed: 1,
+      swept: 1,
     })
     expect(h.launches).toEqual([slug])
-    expect(
-      (await h.store.getEvents(slug)).filter((e): boolean => e.type !== 'target.distance'),
-    ).toEqual(before.filter((e): boolean => e.type !== 'target.distance'))
+    const after = (await h.store.getEvents(slug)).filter(
+      (e): boolean => e.type !== 'target.distance',
+    )
+    expect(after.filter((e) => e.type === 'slot.admitted').map((e) => e.payload)).toEqual([
+      { request: 'resume' },
+    ])
+    expect(after.filter((e): boolean => e.type !== 'slot.admitted')).toEqual(
+      before.filter((e): boolean => e.type !== 'target.distance'),
+    )
   })
 
   test('startup still launches blocked builds with pending abort, pause, or resume commands', async () => {
@@ -6126,6 +6122,7 @@ describe('Dispatcher startup resume', () => {
               },
       )
 
+      // A blocked build holds no slot, and its acknowledgements need none.
       expect(await h.dispatcher.tick({ resumeCurrent: true })).toEqual({
         ...emptyTickReport(),
         resumed: 1,
@@ -17333,7 +17330,7 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     expect(h.launches).toEqual([parked])
   })
 
-  test('a build between finalize.completed and its post-steps keeps its slot when paused, blocked or interrupted', async () => {
+  test('a build between finalize.completed and its post-steps keeps its slot when interrupted; paused or blocked frees it', async () => {
     const toml = `${VERIFY_TOML}\n[finalize]\nsteps = ["notes"]\n[finalize.notes]\nkind = "check"\ncommand = "run"\n`
     for (const variant of ['paused', 'blocked', 'interrupted'] as const) {
       const h = harness({ toml, onLaunch: claimOnLaunch })
@@ -17347,27 +17344,13 @@ describe('capacity counts builds running work, not builds parked for a merge dec
           payload: { id: 'e_1', phase: 'finalize', source: 'stall', question: 'why?' },
         })
       h.tickets.add(readyTicket('T-next'))
-      expect((await h.dispatcher.tick()).dispatched).toBe(0)
+      const waiting = variant !== 'interrupted'
+      expect((await h.dispatcher.tick()).dispatched).toBe(waiting ? 1 : 0)
       expect(await settlements(h, slug)).toBe(0)
       expect(await slotWait(h, slug)).toBeUndefined()
-      expect(await h.store.listBuilds()).toHaveLength(1)
+      expect(await h.store.listBuilds()).toHaveLength(waiting ? 2 : 1)
       // An interrupted unfinished build is relaunched without admission.
-      if (variant === 'interrupted') expect(h.launches).toEqual([slug])
-      else expect(h.launches).toEqual([])
-      if (variant !== 'paused') continue
-      await h.store.append(slug, { actor: KERNEL, type: 'build.resumed', payload: {} })
-      h.clock.advance(60_000)
-      await h.dispatcher.tick()
-      expect(h.launches).toEqual([slug])
-      await h.store.append(slug, {
-        actor: KERNEL,
-        type: 'finalize.step-completed',
-        payload: { step: 'notes', ok: true },
-      })
-      await h.store.releaseLease(slug, `runner-${slug}`)
-      h.clock.advance(60_000)
-      expect((await h.dispatcher.tick()).dispatched).toBe(1)
-      expect(await settlements(h, slug)).toBe(1)
+      expect(h.launches.includes(slug)).toBe(!waiting)
     }
   })
 
@@ -17482,7 +17465,13 @@ describe('capacity counts builds running work, not builds parked for a merge dec
     expect(await settlements(h, running)).toBe(1)
     expect(await settlements(h, waiting)).toBe(1)
 
-    // A reconciled, now re-verifying on a provider-confirmed execution whose lease expires.
+    // A admitted for its reconcile, now re-verifying on a provider-confirmed
+    // execution whose lease expires.
+    await h.store.append(running, {
+      actor: DISPATCHER,
+      type: 'slot.admitted',
+      payload: { request: 'reconcile' },
+    })
     await h.store.append(running, {
       actor: KERNEL,
       type: 'reconcile.started',
@@ -17872,37 +17861,140 @@ describe('capacity counts builds running work, not builds parked for a merge dec
           })
         },
       })
-      expect(h.launches).toEqual([normal])
+      // Admitted, the normal build holds its slot and its refused launch is
+      // retried; nothing else ever launches.
+      expect(new Set(h.launches)).toEqual(new Set([normal]))
     }, 120_000)
 
-    test('an unchanged deferral key never reuses a stale urgent evaluation', async () => {
-      let refuse = true
+    test('an answered build and a paused build waiting behind a busy one keep idle ticks bounded', async () => {
+      const { slotAdmissionReadBudget } = await import('../testing/reduced-read-budget')
+      let calls = 0
       const h = harness({
         toml: VERIFY_TOML,
-        onLaunch: (slug, store) => (refuse ? undefined : claimOnLaunch(slug, store)),
+        onLaunch: (slug, store) => (slug === 'c-busy' ? claimOnLaunch(slug, store) : undefined),
+        wrapTickets: (source) => {
+          const listReady = source.listReady.bind(source)
+          source.listReady = async (...args: Parameters<typeof listReady>) => {
+            calls++
+            return listReady(...args)
+          }
+          return source
+        },
       })
-      const parked = await conflictedParked(h, 'a-parked', 2)
-      // Tick A: the forced scan finds no urgent ticket; the admitted launch
-      // is refused a runner, so the build stays parked under the same key.
+      const answered = await answeredLeaf(h, 'a-answered')
+      await ticketed(h, 'b-paused')
+      await h.store.append('b-paused', { actor: KERNEL, type: 'build.paused', payload: {} })
+      const busy = await busyBuild(h, 'c-busy')
       await h.dispatcher.tick()
-      expect(h.launches).toEqual([parked])
-      // An urgent ticket becomes ready and launches succeed again, before
-      // the cadence is due and with no readiness change.
-      h.tickets.add(readyTicket('U1', { priority: 'urgent' }))
-      refuse = false
-      h.clock.advance(5_000)
-      // Tick B: the unchanged key suppresses the listing, so nothing
-      // authorizes the deferred launch.
-      await h.dispatcher.tick()
-      expect(h.launches).toEqual([parked])
-      expect(await buildFor(h, 'U1')).toBeUndefined()
-      // Tick C: the cadence-due scan claims the urgent ticket first.
+      expect(h.launches).toEqual([])
+      expect(await slotWait(h, answered)).toBe('resume')
+      await slotAdmissionReadBudget({
+        store: h.store as MemoryBuildStore,
+        slug: answered,
+        tick: () => h.dispatcher.tick(),
+        listed: () => calls,
+        launched: () => h.launches.length,
+        advance: () => h.clock.advance(5_000),
+        advanceDue: () => h.clock.advance(60_000),
+        free: () => finish(h, busy),
+      })
+      expect(new Set(h.launches)).toEqual(new Set([answered]))
+      expect(await admissions(h, 'b-paused')).toBe(0)
+    }, 120_000)
+
+    /** A leaf blocked on a question that an operator then answered: it holds
+     * no slot until admitted (SPEC §12 "What holds a slot"). */
+    async function answeredLeaf(h: Harness, slug: string, lease?: string): Promise<string> {
+      await ticketed(h, slug)
+      if (lease !== undefined) await h.store.claimLease(slug, lease, 120_000)
+      await h.store.append(slug, {
+        actor: KERNEL,
+        type: 'escalation.raised',
+        payload: { id: `esc-${slug}`, phase: 'implement', source: 'stall', question: 'why?' },
+      })
+      await h.store.append(slug, {
+        actor: humanActor('operator'),
+        type: 'escalation.answered',
+        payload: { id: `esc-${slug}`, answer: 'retry', resolution: 'retry' },
+      })
+      return slug
+    }
+    const admissions = async (h: Harness, slug: string) =>
+      (await types(h, slug)).filter((type) => type === 'slot.admitted').length
+
+    test('answering escalations never raises occupancy; a freed slot admits one, urgent first', async () => {
+      const h = harness({ toml: `capacity = 2\n${VERIFY_TOML}`, onLaunch: claimOnLaunch })
+      const busy = await busyBuild(h, 'a-busy')
+      await busyBuild(h, 'b-busy')
+      const answered = [
+        await answeredLeaf(h, 'c-answered'),
+        await answeredLeaf(h, 'd-answered'),
+        await answeredLeaf(h, 'e-answered'),
+      ]
+      await setPriority(h, 'e-answered', 'urgent')
       h.clock.advance(60_000)
       await h.dispatcher.tick()
-      const urgent = await buildFor(h, 'U1')
-      expect(urgent).toBeDefined()
-      expect(h.launches).toEqual([parked, urgent!])
-      expect(await slotWait(h, parked)).toBe('reconcile')
+      expect(h.launches).toEqual([])
+      for (const slug of answered) {
+        expect(await admissions(h, slug)).toBe(0)
+        expect(await slotWait(h, slug)).toBe('resume')
+      }
+      await finish(h, busy)
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual(['e-answered'])
+      expect(await admissions(h, 'e-answered')).toBe(1)
+      for (const slug of ['c-answered', 'd-answered']) {
+        expect(await admissions(h, slug)).toBe(0)
+        expect(await slotWait(h, slug)).toBe('resume')
+      }
+    })
+
+    test('a live runner from before the answer never re-admits it (f_43f94fec)', async () => {
+      const h = harness({ toml: VERIFY_TOML, onLaunch: claimOnLaunch })
+      await busyBuild(h, 'a-busy')
+      const leaf = await answeredLeaf(h, 'b-answered', 'runner-old')
+      h.tickets.add(readyTicket('T-next'))
+      expect((await h.dispatcher.tick()).dispatched).toBe(0)
+      expect(await slotWait(h, leaf)).toBe('resume')
+      // Past its old lease, and on a fresh dispatcher, it is still a waiter.
+      h.clock.advance(180_000)
+      const fresh = harness({
+        toml: VERIFY_TOML,
+        clock: h.clock,
+        store: h.store,
+        tickets: [readyTicket('T-next')],
+        onLaunch: claimOnLaunch,
+      })
+      expect((await fresh.dispatcher.tick()).dispatched).toBe(0)
+      expect([...h.launches, ...fresh.launches]).toEqual([])
+      expect(await admissions(h, leaf)).toBe(0)
+      expect(await slotWait(h, leaf)).toBe('resume')
+    })
+
+    test('admission is durable: a fresh dispatcher relaunches an admitted leaf before a claim (f_1b47afee)', async () => {
+      // The launch writes nothing: a dispatcher that crashed after admitting
+      // the leaf but before any runner attached.
+      const h = harness({ toml: VERIFY_TOML })
+      const leaf = await answeredLeaf(h, 'a-answered')
+      h.clock.advance(60_000)
+      await h.dispatcher.tick()
+      expect(h.launches).toEqual([leaf])
+      expect(await admissions(h, leaf)).toBe(1)
+      expect(await types(h, leaf)).not.toContain('execution.started')
+      h.clock.advance(15 * 60_000)
+      const fresh = harness({
+        toml: VERIFY_TOML,
+        clock: h.clock,
+        store: h.store,
+        tickets: [readyTicket('T-next')],
+        onLaunch: claimOnLaunch,
+      })
+      await fresh.dispatcher.tick()
+      expect(await buildFor(fresh, 'T-next')).toBeUndefined()
+      expect(fresh.launches).toEqual([leaf])
+      expect(await admissions(fresh, leaf)).toBe(1)
+      expect(await slotWait(fresh, leaf)).toBeUndefined()
     })
 
     // Five tiers: manual starts, urgent parked work, urgent claims (urgent

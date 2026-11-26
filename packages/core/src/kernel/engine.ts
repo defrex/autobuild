@@ -5,7 +5,7 @@ import { verifyMemberKey } from './verify-stage-state'
 import { mixedVersionDeferred } from './mixed-version'
 import { integrationCurrent, integrationConfig, integrationFailed } from './integration-state'
 import { proposeRunDue, proposeStarted } from './optimization'
-import { reopenSpecPending } from './reopen-state'
+import { reopenSpecPending, reviseSpecPending } from './reopen-state'
 /**
  * The kernel pipeline engine (SPEC §8): "read the event log, decide the next
  * phase per the transition table, invoke the AgentRunner with `/{skill}
@@ -501,13 +501,7 @@ function decideNextInternal(state: BuildState, log: LogIndex, config: Config): D
   // below. guidance and dismiss-finding resolutions do not decide anything
   // here — they route inside the loop rules (feedback priority and stall
   // suppression respectively).
-  if (
-    state.answeredEscalations.some(
-      (e) => e.resolution === 'revise-spec' && e.answeredSeq > log.restartSeq,
-    )
-  ) {
-    return { kind: 'wait', reason: 'awaiting-spec' }
-  }
+  if (reviseSpecPending(state)) return { kind: 'wait', reason: 'awaiting-spec' }
 
   // ── 4. Spec (§6.3: dispatch owns the import; `spec` is not a phase §5) ─────
   if (state.specRev === undefined) return { kind: 'wait', reason: 'awaiting-spec' }

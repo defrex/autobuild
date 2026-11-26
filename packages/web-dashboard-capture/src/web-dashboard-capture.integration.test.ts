@@ -142,8 +142,14 @@ function models(): WebFixtureModels {
     },
     capacity: {
       ...happy,
-      active: { current: 5, limit: 5 },
-      capacity: { configured: 4, occupied: 5, effective: 5, borrowingNodes: ['queue-conflict'] },
+      active: { current: 4, limit: 4 },
+      capacity: {
+        configured: 4,
+        occupied: 4,
+        effective: 4,
+        borrowingNodes: [],
+        waitingBuilds: [{ slug: 'answered-leaf', request: 'resume' }],
+      },
     },
     backpressure: {
       ...happy,

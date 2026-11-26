@@ -2087,6 +2087,14 @@ export const eventPayloadSchemas = {
    * (max of the verify cycle start and finalize completion seqs). Capacity
    * evidence only; no pipeline decision reads it. */
   'pipeline.settled': z.strictObject({ cycle: z.number().int().positive() }),
+  /** The dispatcher's slot gate admitted a work build that held no slot
+   * (SPEC §12 "What holds a slot"), recorded before any lease claim,
+   * provisioning or launch. `request` names the slot request admitted;
+   * omitted for an admission without one. Capacity evidence only; no
+   * pipeline decision reads it. */
+  'slot.admitted': z.strictObject({
+    request: z.enum(['verification', 'reconcile', 'resume', 'reopen', 'propose']).optional(),
+  }),
   'target.rewritten': z.strictObject({
     branch: z.string().min(1),
     previousSha: gitOid,

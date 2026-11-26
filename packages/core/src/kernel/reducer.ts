@@ -458,6 +458,17 @@ export interface BuildState {
    * `wait awaiting-pr` decision (`pipeline.settled`); capacity evidence only,
    * never a pipeline decision input. */
   pipelineSettled?: number
+  /** seq of the latest admission into a slot: the build's `build.created` or
+   * the dispatcher's `slot.admitted` (SPEC §12 "What holds a slot"). Runner
+   * allocation never admits. Capacity evidence only. Omitted for an empty
+   * log, and by an older server. */
+  slotAdmittedSeq?: number
+  /** seq of the latest fact that released the slot or ended an outside wait
+   * whose runner must be admitted again: `pipeline.settled`, an answer that
+   * closes an open escalation, `wait.ended` and `build.paused` (SPEC §12
+   * "What holds a slot"). Capacity evidence only. Omitted until one lands,
+   * and by an older server. */
+  slotReleasedSeq?: number
   /** Full-log `finalize.step-completed` facts, in event order (§5).
    * Post-steps are failure-tolerant, so a completion counts whether `ok` is
    * true or false. Current-spec membership is determined by
@@ -686,6 +697,8 @@ export interface BuildAcc {
   priority?: TicketPriority
   finalizeCompletedSeq: number
   pipelineSettled?: number
+  slotAdmittedSeq?: number
+  slotReleasedSeq?: number
   finalizeSteps: BuildState['finalizeSteps']
   plan: BuildState['plan']
   implement: BuildState['implement']
@@ -1071,6 +1084,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         prState = 'open'
         break
       case 'build.created':
+        acc.slotAdmittedSeq = event.seq
         acc.kind = event.payload.kind
         acc.target = event.payload.target
         acc.baseBranch = event.payload.baseBranch
@@ -1268,6 +1282,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         }
         break
       case 'build.paused':
+        acc.slotReleasedSeq = event.seq
         pausedFlag = true
         pending.pause = []
         break
@@ -1584,6 +1599,10 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         break
       case 'pipeline.settled':
         acc.pipelineSettled = Math.max(acc.pipelineSettled ?? 0, event.payload.cycle)
+        acc.slotReleasedSeq = event.seq
+        break
+      case 'slot.admitted':
+        acc.slotAdmittedSeq = event.seq
         break
       case 'finalize.step-completed':
         // §5: post-steps are independent and failure-tolerant — a completion
@@ -1802,6 +1821,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         const wait = acc.wait
         if (wait?.id !== event.payload.id || wait.ended) break
         wait.ended = { cause: event.payload.cause, seq: event.seq, message: event.payload.message }
+        acc.slotReleasedSeq = event.seq
         const open = openEscalations.get(wait.escalation)
         if (open) {
           openEscalations.delete(open.id)
@@ -1874,6 +1894,7 @@ function foldBuild(acc: BuildAcc, events: readonly AbEvent[]): void {
         const open = openEscalations.get(event.payload.id)
         if (open) {
           openEscalations.delete(event.payload.id)
+          acc.slotReleasedSeq = event.seq
           answeredEscalations.push({
             ...open,
             answer: event.payload.answer,
@@ -2039,6 +2060,8 @@ function finishBuild(acc: BuildAcc): BuildState {
     autoMerge: acc.autoMerge,
     finalizeCompletedSeq: acc.finalizeCompletedSeq,
     ...(acc.pipelineSettled !== undefined ? { pipelineSettled: acc.pipelineSettled } : {}),
+    ...(acc.slotAdmittedSeq !== undefined ? { slotAdmittedSeq: acc.slotAdmittedSeq } : {}),
+    ...(acc.slotReleasedSeq !== undefined ? { slotReleasedSeq: acc.slotReleasedSeq } : {}),
     finalizeSteps: acc.finalizeSteps,
     lastEvent,
     lastSeq: Math.max(lastEvent?.seq ?? 0, acc.compatibility.lastSeq),

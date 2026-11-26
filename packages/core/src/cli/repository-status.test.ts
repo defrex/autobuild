@@ -24,14 +24,9 @@ test('human output labels the repository and every dispatcher setting', () => {
   ])
 })
 
-test('human repository status explains actual, configured and descendant-held capacity', () => {
+test('human repository status reports slot holders against configured capacity', () => {
   const status = projectRepositoryStatus(REPO, [])
   expect(status.capacity).toBeUndefined()
-  status.capacity = { configured: 5, occupied: 6, effective: 6, borrowingNodes: ['website-node'] }
-  expect(renderRepositoryStatus(status)).toContain(
-    'capacity: 6/6 effective; 5 configured; 1 node using descendant-held slots: website-node',
-  )
-  expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
   status.capacity = {
     configured: 2,
     occupied: 2,
@@ -39,10 +34,14 @@ test('human repository status explains actual, configured and descendant-held ca
     borrowingNodes: [],
     waitingNodes: [{ slug: 'release-node', request: 'verification' }],
   }
-  expect(renderRepositoryStatus(status)).toContain(
-    'capacity: 2/2 effective; 2 configured; 0 nodes using descendant-held slots; 1 node waiting for a slot ahead of normal ticket claims: release-node (verification)',
+  const line = renderRepositoryStatus(status).find((entry) => entry.startsWith('capacity:'))
+  expect(line).toBe(
+    'capacity: 2/2; 1 node waiting for a slot ahead of normal ticket claims: release-node (verification)',
   )
   expect(JSON.parse(JSON.stringify(status)).capacity).toEqual(status.capacity)
+  // An older server's projection renders its occupancy as-is, never borrowing.
+  status.capacity = { configured: 5, occupied: 6, effective: 6, borrowingNodes: ['website-node'] }
+  expect(renderRepositoryStatus(status)).toContain('capacity: 6/5')
 })
 
 test('the event projection and the facts projection agree on forge rate limits', () => {

@@ -1501,6 +1501,56 @@ describe('reduceBuild: finalize projections', () => {
     expect(reduceBuild(log.slice(0, 7)).pipelineSettled).toBe(6)
   })
 
+  test('slot seqs: only build.created and slot.admitted admit; release facts release (SPEC §12)', () => {
+    expect(reduceBuild([])).not.toHaveProperty('slotAdmittedSeq')
+    expect(reduceBuild([])).not.toHaveProperty('slotReleasedSeq')
+    const log = toLog([
+      ...prelude(),
+      ev('escalation.raised', {
+        id: 'esc_1',
+        phase: 'implement',
+        round: 1,
+        source: 'agent',
+        question: 'which API?',
+      }),
+      ev('escalation.answered', { id: 'unknown', answer: 'a', resolution: 'guidance' }),
+      ev('escalation.answered', { id: 'esc_1', answer: 'the new one', resolution: 'guidance' }),
+      // Runner allocation never admits (f_43f94fec).
+      ev('workspace.provision-started', { provider: 'p', branch: 'ab/x', generation: 1 }),
+      ev('execution.started', { provider: 'p', workspaceRef: 'w', instance: 'i' }),
+      ev('runner.attached', { instance: 'runner-2', host: 'local' }),
+      ev('session.started', {
+        session: 's',
+        phase: 'implement',
+        round: 1,
+        role: 'r',
+        runner: 'c',
+      }),
+      ev('slot.admitted', { request: 'resume' }),
+      ev('build.pause-requested', {}),
+      ev('build.paused', {}),
+      ev('build.resume-requested', {}),
+      ev('build.resumed', {}),
+      ev('spec.revised', {
+        artifact: { kind: 'spec', rev: 1 },
+        operator: { user: 'aron' },
+      }),
+      ev('pipeline.settled', { cycle: 3 }),
+    ])
+    const at = (seq: number) => reduceBuild(log.slice(0, seq))
+    expect(at(4)).toMatchObject({ slotAdmittedSeq: 1 })
+    expect(at(4)).not.toHaveProperty('slotReleasedSeq')
+    // An answer to an unknown escalation releases nothing.
+    expect(at(6)).not.toHaveProperty('slotReleasedSeq')
+    expect(at(7)).toMatchObject({ slotAdmittedSeq: 1, slotReleasedSeq: 7 })
+    expect(at(11)).toMatchObject({ slotAdmittedSeq: 1, slotReleasedSeq: 7 })
+    expect(at(12)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 7 })
+    expect(at(14)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 14 })
+    // Resume and spec revision neither admit nor release.
+    expect(at(17)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 14 })
+    expect(at(18)).toMatchObject({ slotAdmittedSeq: 12, slotReleasedSeq: 18 })
+  })
+
   test('prState is UNCHANGED by the addition — it stays the full-log PR fact', () => {
     // f_03d0f6d4's constraint: the janitor (dispatcher.ts:342,:367,:396) and
     // the restart-orthogonal epilogue (engine.ts:402) read prState, so the fix
