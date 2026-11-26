@@ -192,11 +192,12 @@ export function slotAdmitted(
 
 /** A finished leaf still owes work before it waits for its merge decision:
  * a rewritten target, a conflicted PR, a reopen (its spec publication
- * included), a restack, an unsettled verify cycle or finalize, or a pending
- * measurement request. */
+ * included), a restack, an unsettled verify cycle or finalize, a pending
+ * measurement request, or an open session to recover or close. */
 function epilogueWorkDue(build: LeafSlotFacts): boolean {
   const { state } = build
   return (
+    state.sessions.open.length > 0 ||
     state.targetRewrite !== undefined ||
     state.prState === 'conflicted' ||
     reopenSpecPending(state) ||
