@@ -73,7 +73,17 @@ function liveBlocks(row: WebBuildRow, now: number): FlowBlock[] {
           facts={[
             {
               term: 'status',
-              value: <StateWord tone={row.status.tone}>{row.status.word}</StateWord>,
+              value: (
+                <>
+                  <StateWord tone={row.status.tone}>{row.status.word}</StateWord>
+                  {row.status.note !== undefined && (
+                    <span data-ansi="row-flag" data-tone="pending">
+                      {' '}
+                      ({row.status.note})
+                    </span>
+                  )}
+                </>
+              ),
             },
             { term: 'phase', value: row.phase ?? '–', mono: true },
             { term: 'kind', value: row.kind, mono: true },

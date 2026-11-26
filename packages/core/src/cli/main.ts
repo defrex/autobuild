@@ -1000,7 +1000,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'builds': {
-      const { abBuilds } = await import('./status')
+      const { abBuilds, statusColor } = await import('./status')
       const usage = 'usage: ab builds [--queued] [--all] [--json] [--store <ref>] (§8.2)'
       const parsed = parseArgs(
         rest,
@@ -1020,6 +1020,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         queued: parsed.flags.has('queued'),
         all: parsed.flags.has('all'),
         json: parsed.flags.has('json'),
+        color: statusColor(deps.terminal, parsed.flags.has('json')),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),
         ...(deps.clock !== undefined ? { now: deps.clock } : {}),
@@ -1050,7 +1051,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
     }
 
     case 'build': {
-      const { abBuildAssetGet, abBuildStatus } = await import('./status')
+      const { abBuildAssetGet, abBuildStatus, statusColor } = await import('./status')
       const usage =
         'usage: ab build status <slug> [--events <n>] [--json] [--store <ref>] (§8.2)\n' +
         '       ab build asset get <slug> <kind> <name> <dest> [--rev <n>] [--json] [--store <ref>] (§8.8)'
@@ -1117,6 +1118,7 @@ async function dispatch(argv: string[], deps: SessionlessCliDeps): Promise<numbe
         stdout,
         slug,
         json: parsed.flags.has('json'),
+        color: statusColor(deps.terminal, parsed.flags.has('json')),
         ...(events !== undefined ? { events } : {}),
         ...(storeRef !== undefined ? { storeRef } : {}),
         ...(deps.openStore !== undefined ? { openStore: deps.openStore } : {}),

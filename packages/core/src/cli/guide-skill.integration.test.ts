@@ -239,7 +239,9 @@ describe('ab-guide — dispatch dashboard summary', () => {
     expect(compact).not.toContain('`drift`')
     expect(compact).not.toContain('renders as `/0`')
     expect(compact).toContain('conditional yellow `repository PAUSED` segment')
-    expect(compact).toContain('only queued rows gain a yellow `(held)` modifier beside `QUEUED`')
+    expect(compact).toContain(
+      'only these queued rows gain a yellow `(held)` modifier beside `STARTING`',
+    )
     expect(compact).toContain(
       'intake being off without that hold shows neither `repository PAUSED` nor `(held)`',
     )
