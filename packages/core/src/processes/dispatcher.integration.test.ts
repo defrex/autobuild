@@ -15032,6 +15032,80 @@ test('fresh node polling while the node waits for a slot at full capacity has bo
   expect(h.launches).not.toContain(node.slug)
 }, 30_000)
 
+test('fresh node polling while an admitted node holds its slot has bounded reads (SPEC §12)', async () => {
+  const toml = [
+    'capacity = 1',
+    '[commands]',
+    'test = "true"',
+    '[verify]',
+    'steps = ["unit"]',
+    '[verify.unit]',
+    'kind = "check"',
+    'command = "test"',
+  ].join('\n')
+  const h = harness({ toml, tickets: [readyTicket('N', { kind: 'node' })] })
+  h.forge.remoteBranches.set('main', BASE_SHA)
+  await h.dispatcher.tick()
+  await h.dispatcher.tick({ acceptNewWork: false })
+  const node = (await h.store.listBuilds())[0]!
+  const { integrationConfig } = await import('../kernel/integration-state')
+  const { nodeHoldsSlot } = await import('../kernel/dispatch-capacity')
+  const before = (await readBuildFacts(h.store, node.slug)).value.state
+  await h.store.append(node.slug, {
+    actor: DISPATCHER,
+    type: 'integration.observed',
+    payload: { openChildren: [], diagnostics: [], contributions: ['merged-child'] },
+  })
+  const prepared = await h.store.append(node.slug, {
+    actor: DISPATCHER,
+    type: 'integration.prepared',
+    payload: {
+      id: 'cycle',
+      head: before.nodeComparison!.headSha,
+      parent: before.nodeComparison!.parentSha,
+      config: integrationConfig(parseConfig(withReadyState(toml))),
+    },
+  })
+  await h.store.append(node.slug, {
+    actor: DISPATCHER,
+    type: 'slot.admitted',
+    payload: { request: 'verification', need: `integration:cycle:${prepared.seq}` },
+  })
+  // Its runner is live: the steady state of an admitted node.
+  await h.store.claimLease(node.slug, 'node-runner', 3_600_000)
+  const slotHeld = {
+    admissions: async () =>
+      (await h.store.getEvents(node.slug)).filter((event) => event.type === 'slot.admitted').length,
+    held: async () => {
+      const facts = (await readBuildFacts(h.store, node.slug)).value
+      return nodeHoldsSlot(
+        {
+          record: (await h.store.getBuild(node.slug))!,
+          state: facts.state,
+          workspace: facts.workspace !== null,
+        },
+        h.clock(),
+      )
+    },
+  }
+  expect(await slotHeld.held()).toBe(true)
+  const { nodePollingReadBudget } = await import('../testing/reduced-read-budget')
+  await nodePollingReadBudget({
+    store: h.store as MemoryBuildStore,
+    slug: node.slug,
+    advance: (ms) => h.clock.advance(ms),
+    slotHeld,
+    tick: () =>
+      harness({
+        toml,
+        store: h.store,
+        clock: h.clock,
+        wrapTickets: () => h.tickets,
+        dispatchForge: h.forge,
+      }).dispatcher.tick({ acceptNewWork: false }),
+  })
+}, 30_000)
+
 test('node child discovery against digests without node targets fails typed, never reading facts', async () => {
   const h = harness({ tickets: [readyTicket('N', { kind: 'node' })] })
   h.forge.remoteBranches.set('main', BASE_SHA)
@@ -19427,7 +19501,7 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     expect(await types()).toContain('workspace.released')
   })
 
-  test('a normal node holding its measurement workspace relaunches ahead of urgent waiting work', async () => {
+  test('a normal node admitted for its measurement relaunches ahead of urgent waiting work', async () => {
     const h = harness({ toml: 'capacity = 1\n' })
     const openNode = async (slug: string) => {
       h.forge.seedBranch(`ab-node/${slug}`, PIN)
@@ -19456,8 +19530,13 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       'workspace.provisioned',
     )
 
-    // The launched session never claimed its lease; the node keeps its
-    // workspace and the only slot. Urgent work now waits for a slot.
+    // The launched session never claimed its lease; the node's durable
+    // admission keeps the only slot (SPEC §12). Urgent work now waits for it.
+    expect(
+      (await h.store.getEvents(NODE))
+        .filter((event) => event.type === 'slot.admitted')
+        .map((event) => event.payload),
+    ).toEqual([{ request: 'verification', need: `measure:baseline:1:${PIN}` }])
     const urgent = 'opt-urgent'
     await openNode(urgent)
     await h.store.append(urgent, {
@@ -19465,14 +19544,13 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
       type: 'build.priority-set',
       payload: { priority: 'urgent' },
     })
-    // Priority orders free slots only: node admission, which retries a
-    // workspace-holding measurement node, admits the owner without reserving
-    // its slot for the urgent node, which waits for it.
+    // Priority orders free slots only: node admission admits the holder at
+    // once, without reserving its slot for the urgent node, which waits.
     const admission = (
       h.dispatcher as unknown as {
-        nodeHasCapacity: (slug: string) => Promise<'admit' | 'wait' | 'defer'>
+        nodeAdmission: (slug: string) => Promise<'admit' | 'wait' | 'defer'>
       }
-    ).nodeHasCapacity.bind(h.dispatcher)
+    ).nodeAdmission.bind(h.dispatcher)
     expect(await admission(NODE)).toBe('admit')
     expect(await admission(urgent)).toBe('wait')
     h.clock.advance(10 * 60_000)
@@ -19481,6 +19559,197 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     expect((await h.store.getEvents(urgent)).map((event) => event.type)).not.toContain(
       'workspace.provisioned',
     )
+    // The relaunch needed no new admission.
+    expect(
+      (await h.store.getEvents(NODE)).filter((event) => event.type === 'slot.admitted'),
+    ).toHaveLength(1)
+  })
+
+  test('a verification admission whose provisioning fails still counts before proposers are admitted', async () => {
+    const h = harness({ toml: 'capacity = 1\n' })
+    const open = async (slug: string) => {
+      h.forge.seedBranch(`ab-node/${slug}`, PIN)
+      await h.store.createBuild({ slug, repo: REPO, branch: `ab-node/${slug}` })
+      const append = (type: string, payload: object, actor: object = DISPATCHER) =>
+        h.store.append(slug, { actor, type, payload } as never)
+      await append('build.created', {
+        ticket: { source: 'fake', id: slug.toUpperCase() },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      })
+      await append('optimization.objective-accepted', {
+        objective: objective(),
+        revision: 1,
+        harnessPin: PIN,
+        specRev: 0,
+      })
+      await append('node.opened', { sha: PIN })
+      return append
+    }
+    await open('a-measure')
+    const propose = await open('z-propose')
+    await propose(
+      'optimization.baseline-measured',
+      { revision: 1, head: PIN, harnessPin: PIN, samples: 3, median: 50, spread: 0.5 },
+      KERNEL,
+    )
+    await propose('optimization.proposal-requested', {
+      id: 'req-z',
+      head: PIN,
+      room: 1,
+      budgetUsed: { attempts: 0, hours: 0 },
+    })
+    const provision = h.workspaces.provision.bind(h.workspaces)
+    h.workspaces.provision = async (request) => {
+      if (request.branch === 'ab-node/a-measure') throw new Error('provider unavailable')
+      return provision(request)
+    }
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const admitted = []
+    for (const slug of ['a-measure', 'z-propose'])
+      if ((await h.store.getEvents(slug)).some((event) => event.type === 'slot.admitted'))
+        admitted.push(slug)
+    expect(admitted).toEqual(['a-measure'])
+    expect(h.launches).not.toContain('z-propose')
+  })
+
+  describe('node runners an older dispatcher launched (version transition, SPEC §15)', () => {
+    const NEED = { request: 'verification' as const, need: `measure:baseline:1:${PIN}` }
+    /** A measurement node whose runner an older dispatcher launched with no
+     * admission, at capacity 1, with an urgent ready ticket and a manual
+     * start request waiting. `afterRunner` requests a pause it has not
+     * acknowledged. */
+    async function legacy(opts: { afterRunner?: 'pause' } = {}) {
+      const h = harness({
+        toml: 'capacity = 1\n',
+        tickets: [
+          readyTicket('U1', { title: 'Urgent work', priority: 'urgent' }),
+          readyTicket('M1', { title: 'Manual start' }),
+        ],
+      })
+      h.forge.seedBranch(`ab-node/${NODE}`, PIN)
+      await h.store.createBuild({ slug: NODE, repo: REPO, branch: `ab-node/${NODE}` })
+      const append = (type: string, payload: object, actor: object = DISPATCHER) =>
+        h.store.append(NODE, { actor, type, payload } as never)
+      await append('build.created', {
+        ticket: { source: 'fake', id: 'NODE' },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      })
+      await append('optimization.objective-accepted', {
+        objective: objective(),
+        revision: 1,
+        harnessPin: PIN,
+        specRev: 0,
+      })
+      await append('node.opened', { sha: PIN })
+      await append('workspace.provisioned', {
+        provider: 'fake',
+        ref: `/ws/ab-node/${NODE}`,
+        branch: `ab-node/${NODE}`,
+        base: { source: 'remote', sha: PIN },
+      })
+      await append('execution.started', {
+        provider: 'fake',
+        workspaceRef: `/ws/ab-node/${NODE}`,
+        instance: 'old',
+      })
+      await h.store.claimLease(NODE, 'old-runner', 60_000)
+      if (opts.afterRunner === 'pause')
+        await append('build.pause-requested', {}, humanActor('operator'))
+      await requestTicketStart({
+        store: h.store,
+        repo: REPO,
+        source: h.tickets,
+        id: 'M1',
+        user: 'operator',
+      })
+      const admissions = async () =>
+        (await h.store.getEvents(NODE))
+          .filter((event) => event.type === 'slot.admitted')
+          .map((event) => event.payload)
+      const claimed = async () =>
+        (await h.store.listBuilds())
+          .filter((record) => record.slug !== NODE)
+          .map((record) => record.ticket?.id)
+      return { h, append, admissions, claimed }
+    }
+
+    test('a released node with a retained workspace does not resume at startup into a held slot', async () => {
+      const { h, append, admissions } = await legacy()
+      await append('execution.ended', {
+        instance: 'old',
+        workspaceRef: `/ws/ab-node/${NODE}`,
+        outcome: 'completed',
+      })
+      await h.store.releaseLease(NODE, 'old-runner')
+      await append('build.paused', {})
+      await append('build.resumed', {})
+      // A work build holds the only slot.
+      await h.store.createBuild({ slug: 'holder', repo: REPO, branch: 'ab/holder' })
+      await h.store.append('holder', {
+        actor: DISPATCHER,
+        type: 'build.created',
+        payload: { ticket: { source: 'fake', id: 'H' }, repo: REPO, baseBranch: 'main' },
+      })
+      await h.dispatcher.tick({ resumeCurrent: true, acceptNewWork: false })
+      expect(h.launches).not.toContain(NODE)
+      expect(await admissions()).toEqual([])
+    })
+
+    test('it keeps the only slot, is adopted once, and holds through a lost runner and a restart', async () => {
+      const { h, append, admissions, claimed } = await legacy()
+      await h.dispatcher.tick()
+      expect(await claimed()).toEqual([])
+      expect(await admissions()).toEqual([NEED])
+      // The runner is lost; a fresh dispatcher on the same store still counts
+      // the slot and relaunches with no further admission.
+      h.clock.advance(120_000)
+      await append('execution.ended', {
+        instance: 'old',
+        workspaceRef: `/ws/ab-node/${NODE}`,
+        outcome: 'lost',
+      })
+      const fresh = harness({
+        store: h.store,
+        clock: h.clock,
+        forge: h.forge,
+        wrapTickets: () => h.tickets,
+        toml: 'capacity = 1\n',
+      })
+      await fresh.dispatcher.tick()
+      await fresh.dispatcher.tick()
+      expect(fresh.launches).toContain(NODE)
+      expect(await claimed()).toEqual([])
+      expect(await admissions()).toEqual([NEED])
+      // Recording the starting value finishes the work and frees the slot.
+      await append(
+        'optimization.baseline-measured',
+        { revision: 1, head: PIN, harnessPin: PIN, samples: 3, median: 50, spread: 0.5 },
+        KERNEL,
+      )
+      await fresh.dispatcher.tick()
+      expect((await claimed()).length).toBe(1)
+    })
+
+    test('a runner started before a pending pause holds until the pause is acknowledged', async () => {
+      const { h, append, admissions, claimed } = await legacy({ afterRunner: 'pause' })
+      await h.dispatcher.tick()
+      await h.dispatcher.tick()
+      expect(await claimed()).toEqual([])
+      expect(await admissions()).toEqual([NEED])
+      await append('build.paused', {})
+      await append('execution.ended', {
+        instance: 'old',
+        workspaceRef: `/ws/ab-node/${NODE}`,
+        outcome: 'completed',
+      })
+      await h.store.releaseLease(NODE, 'old-runner')
+      await h.dispatcher.tick()
+      expect((await claimed()).length).toBe(1)
+    })
   })
 
   test('idle ticks stay bounded at 100 and 100,000 events', async () => {

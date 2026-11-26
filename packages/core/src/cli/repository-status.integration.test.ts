@@ -514,6 +514,13 @@ test.each([false, true])(
         base: { source: 'local', sha: 'head', remoteError: 'fixture' },
       },
     })
+    // The dispatcher admitted the node to reconcile its restack (SPEC §12);
+    // its workspace alone would hold nothing.
+    await store.append('node', {
+      actor: DISPATCHER,
+      type: 'slot.admitted',
+      payload: { request: 'reconcile', need: 'reconcile:restack' },
+    })
     await store.append('child', { actor: DISPATCHER, type: 'build.paused', payload: {} })
     // The paused child holds no slot, so the conflict node fills the only one.
     const expected = {

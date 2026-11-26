@@ -14,6 +14,9 @@ import {
   epilogueLeaf,
   epilogueUnsettled,
   intakeCapacity,
+  legacyNodeRunner,
+  nodeHoldsSlot,
+  nodeRunnerWork,
   occupiesCapacity,
   reservedAhead,
   settlementDue,
@@ -65,11 +68,23 @@ function build(
     workspace: false,
   }
 }
-function conflict(slug: string): CapacityBuild {
-  const node = build(slug, 'node')
-  node.state.nodeRestack = { items: [], conflict: { id: 'conflict', index: 0, base: 'base' } }
-  node.workspace = true
+/** A node admitted for the runner need `key` since its last release. */
+function admit<T extends CapacityBuild>(node: T, key: string): T {
+  node.state.slotAdmittedSeq = 2
+  node.state.slotAdmittedNeed = key
   return node
+}
+/** A node in a restack conflict, admitted to reconcile it unless `admitted`
+ * is false. */
+function conflict(slug: string, admitted = true): CapacityBuild {
+  const node = build(slug, 'node')
+  node.state.nodeRestack = {
+    items: [],
+    active: { id: 'conflict' } as never,
+    conflict: { id: 'conflict', index: 0, base: 'base' },
+  }
+  node.workspace = true
+  return admitted ? admit(node, 'reconcile:conflict') : node
 }
 
 test('blocked and paused descendants hold no slot, so occupancy never exceeds configured', () => {
@@ -127,24 +142,9 @@ function verifying(slug: string): CapacityBuild {
   return node
 }
 
-test('verification reserves occupancy with workspace, provisioning or live lease; expired leases do not', () => {
-  const node = verifying('node')
-  expect(occupiesCapacity(node, now)).toBe(false)
-  node.provisioning = true
-  expect(occupiesCapacity(node, now)).toBe(true)
-  node.provisioning = false
-  node.record.lease = { holder: 'runner', expiresAt: '2026-10-20T16:00:00Z' }
-  expect(occupiesCapacity(node, now)).toBe(true)
-  node.record.lease.expiresAt = now.toISOString()
-  expect(occupiesCapacity(node, now)).toBe(false)
-  node.workspace = true
-  expect(occupiesCapacity(node, now)).toBe(true)
-})
-
 test('pending verification counts every slot holder; a paused descendant holds none', () => {
-  const first = verifying('first')
+  const first = admit(verifying('first'), 'integration:cycle:1')
   const second = verifying('second')
-  first.provisioning = true
   const builds = [first, second, build('child', 'work', 'paused', 'first')]
   expect(dispatchCapacity(builds, 1, now)).toEqual({
     configured: 1,
@@ -178,9 +178,11 @@ test('a node awaiting verification reserves one intake slot without occupying on
   expect(intakeCapacity(capacity)).toBe(0)
 })
 
-test('a node holding its workspace, provisioning or live lease is occupied, not waiting', () => {
+test('no admission, no slot: a workspace, provisioning marker or lease takes none (SPEC §12)', () => {
   for (const hold of ['workspace', 'provisioning', 'lease'] as const) {
     const node = verifying('node')
+    // A release recorded since creation: a lease alone is no legacy runner.
+    node.state.slotReleasedSeq = 2
     if (hold === 'workspace') node.workspace = true
     if (hold === 'provisioning') node.provisioning = true
     if (hold === 'lease')
@@ -188,10 +190,10 @@ test('a node holding its workspace, provisioning or live lease is occupied, not 
         holder: 'runner',
         expiresAt: '2026-10-20T16:00:00Z',
       }
-    expect(slotRequest(node, now)).toBeUndefined()
+    expect(occupiesCapacity(node, now)).toBe(false)
+    expect(slotRequest(node, now)).toBe('verification')
     const capacity = dispatchCapacity([node, build('a')], 3, now)
-    expect(capacity.occupied).toBe(2)
-    expect(capacity.waitingNodes).toBeUndefined()
+    expect(capacity.occupied).toBe(1)
     expect(intakeCapacity(capacity)).toBe(1)
   }
 })
@@ -229,15 +231,17 @@ test('paused, blocked, escalated, deferred, verified and landed nodes do not wai
   }
 })
 
-test('an unallocated conflict node waits for reconcile without being subtracted twice', () => {
-  const node = conflict('node')
-  node.workspace = false
+test('an unadmitted conflict node requests reconcile and reserves one intake slot', () => {
+  const node = conflict('node', false)
   const capacity = dispatchCapacity([node, build('a')], 3, now)
-  expect(capacity.occupied).toBe(2)
+  expect(capacity.occupied).toBe(1)
   expect(capacity.waitingNodes).toEqual([{ slug: 'node', request: 'reconcile' }])
   expect(intakeCapacity(capacity)).toBe(1)
-  node.state.openEscalations = [{ id: 'esc' } as never]
-  expect(slotRequest(node, now)).toBeUndefined()
+  // An urgent reconcile waiter reserves ahead of normal work like any other.
+  node.state.priority = 'urgent'
+  const urgent = dispatchCapacity([node, build('a')], 2, now)
+  expect(intakeCapacity(urgent, {}, 'normal')).toBe(0)
+  expect(reservedAhead(urgent, { slug: 'leaf', priority: 'normal' })).toBe(1)
 })
 
 test('capacity wording covers waiting and ignores legacy borrowing', () => {
@@ -518,12 +522,12 @@ describe('slot admission order', () => {
       urgentClaims: 1,
     }
     expect(reservedAhead(capacity, { slug: 'verify', priority: 'urgent' })).toBe(0)
-    // An urgent reconcile node already occupies its slot; the rest reserve.
-    expect(reservedAhead(capacity, { slug: 'n', priority: 'normal' })).toBe(3)
+    // Every urgent waiter reserves, a reconcile node's included (SPEC §12).
+    expect(reservedAhead(capacity, { slug: 'n', priority: 'normal' })).toBe(4)
     // A waiter never reserves ahead of itself.
     expect(
       reservedAhead({ ...capacity, urgentClaims: 0 }, { slug: 'leaf', priority: 'normal' }),
-    ).toBe(1)
+    ).toBe(2)
   })
 
   test('urgent claims wait only for urgent parked work', () => {
@@ -800,14 +804,23 @@ test('a node due its starting measurement requests verification and occupies whi
   const capacity = dispatchCapacity([node, build('a')], 3, now)
   expect(capacity.waitingNodes).toEqual([{ slug: 'node', request: 'verification' }])
   expect(intakeCapacity(capacity)).toBe(1)
+  // A workspace takes no slot; admission for the measurement does.
   node.workspace = true
+  expect(occupiesCapacity(node, now)).toBe(false)
+  admit(node, `measure:baseline:1:${node.state.optimization!.accepted.harnessPin}`)
   expect(slotRequest(node, now)).toBeUndefined()
   expect(occupiesCapacity(node, now)).toBe(true)
-  node.workspace = false
+  // A requested pause keeps it until acknowledged.
+  node.state.pendingCommands = [{ command: 'pause', seq: 3 } as never]
+  expect(occupiesCapacity(node, now)).toBe(true)
+  node.state.pendingCommands = []
   node.state.status = 'blocked'
+  expect(occupiesCapacity(node, now)).toBe(false)
   expect(slotRequest(node, now)).toBeUndefined()
   node.state.status = 'running'
+  // Recording the starting value finishes the work and releases the slot.
   node.state.optimization!.starting = { value: 10, spread: 0.1, head: 'a'.repeat(40) }
+  expect(occupiesCapacity(node, now)).toBe(false)
   expect(slotRequest(node, now)).toBeUndefined()
 })
 
@@ -852,17 +865,20 @@ describe('the optimization proposer', () => {
     expect(occupiesCapacity(node, when)).toBe(false)
   })
 
-  test('a held, deposited or stale request asks for nothing; a running one keeps its slot', () => {
-    const held = { ...proposerNode('opt'), workspace: true }
+  test('a held, deposited or stale request asks for nothing; an admitted one keeps its slot', () => {
+    const held = admit({ ...proposerNode('opt'), workspace: true }, 'propose:r1')
     expect(slotRequest(held, when)).toBeUndefined()
     expect(occupiesCapacity(held, when)).toBe(true)
-    const deposited = proposerNode('opt')
+    // A workspace alone holds nothing.
+    expect(occupiesCapacity({ ...proposerNode('opt'), workspace: true }, when)).toBe(false)
+    const deposited = admit(proposerNode('opt'), 'propose:r1')
     deposited.state.optimization!.proposal!.deposited = {
       artifact: { kind: 'attempts', rev: 0 },
       ids: ['a'],
       at: when.toISOString(),
     }
     expect(slotRequest(deposited, when)).toBeUndefined()
+    expect(occupiesCapacity(deposited, when)).toBe(false)
     expect(slotRequest(proposerNode('opt', 5), when)).toBeUndefined()
     // Idle hours never spend the budget; 24 active hours do.
     expect(slotRequest(proposerNode('opt'), new Date('2026-11-18T01:00:00Z'))).toBe('propose')
@@ -954,11 +970,13 @@ test('a panel node owing progress requests verification and occupies while measu
   node.state.optimization!.progressQueue = ['c'.repeat(40)]
   expect(slotRequest(node, now)).toBe('verification')
   expect(occupiesCapacity(node, now)).toBe(false)
-  node.workspace = true
+  admit(node, `measure:progress:${'c'.repeat(40)}`)
   expect(slotRequest(node, now)).toBeUndefined()
   expect(occupiesCapacity(node, now)).toBe(true)
-  node.workspace = false
+  // An acknowledged pause releases it.
   node.state.status = 'paused'
+  node.state.slotReleasedSeq = 3
+  expect(occupiesCapacity(node, now)).toBe(false)
   expect(slotRequest(node, now)).toBeUndefined()
 })
 
@@ -1166,10 +1184,11 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
     const paused = leaf('a', [attached, write('build.pause-requested'), write('build.paused')])
     expect(slot(paused)).toEqual({ state: 'none' })
     expect(slot(finished('a', { settled: 10 }))).toEqual({ state: 'none' })
-    // A conflicted node both occupies a slot and waits as reconcile: held.
+    // An admitted conflict holds its slot; an unadmitted one requests it.
     const node = conflict('node')
     node.workspace = false
-    expect(slotRequest(node, at)).toBe('reconcile')
+    expect(slotRequest(node, at)).toBeUndefined()
+    expect(slot(conflict('waiting', false))).toEqual({ state: 'requested', request: 'reconcile' })
     expect(slot(node)).toEqual({ state: 'held' })
     expect(slot(build('aborting', 'work', 'aborted'))).toEqual({ state: 'none' })
     expect(slot(build('merged', 'work', 'done'))).toBeUndefined()
@@ -1187,5 +1206,165 @@ describe('leaf slot model (SPEC §12 "What holds a slot")', () => {
       borrowingNodes: [],
       slots: { node: { state: 'held' }, child: { state: 'none' } },
     })
+  })
+})
+
+describe('node slot model (SPEC §12 "What holds a slot")', () => {
+  const live = { holder: 'runner', expiresAt: '2026-10-20T16:00:00Z' }
+  const expired = { holder: 'runner', expiresAt: '2026-10-20T14:00:00Z' }
+  const cycleKey = 'integration:cycle:1'
+  const execution = (seq: number) =>
+    ({ seq, provider: 'local', workspaceRef: 'ws', instance: 'i' }) as never
+  /** The current cycle's verification failed: the node waits for a repair child. */
+  const fail = (node: CapacityBuild) => {
+    node.state.verify.results = [
+      { seq: 9, step: 'unit', restackId: 'cycle', outcome: 'fail' } as never,
+    ]
+  }
+
+  test('an admitted cycle holds through a lost runner and a restart, until the cycle is done', () => {
+    const node = admit(verifying('node'), cycleKey)
+    expect(nodeHoldsSlot(node, now)).toBe(true)
+    // No runner, an expired lease or no workspace: still held, nothing requested.
+    node.record.lease = expired
+    expect(occupiesCapacity(node, now)).toBe(true)
+    expect(slotRequest(node, now)).toBeUndefined()
+    expect(nodeRunnerWork(node, now)).toEqual({ request: 'verification', key: cycleKey })
+    // A failed cycle waits for a repair child: no slot, no request.
+    fail(node)
+    expect(occupiesCapacity(node, now)).toBe(false)
+    expect(slotRequest(node, now)).toBeUndefined()
+    // A new cycle is new work: it requests verification again.
+    node.state.verify.results = []
+    node.state.integration!.cycle!.seq = 5
+    expect(occupiesCapacity(node, now)).toBe(false)
+    expect(slotRequest(node, now)).toBe('verification')
+  })
+
+  test('a restack conflict holds across the active restack and frees the slot while escalated', () => {
+    const node = conflict('node')
+    expect(occupiesCapacity(node, now)).toBe(true)
+    // The kernel replays later items with no runner; the restack keeps it.
+    delete node.state.nodeRestack!.conflict
+    expect(occupiesCapacity(node, now)).toBe(true)
+    delete node.state.nodeRestack!.active
+    expect(occupiesCapacity(node, now)).toBe(false)
+    // An open escalation on the conflict is an outside wait.
+    const escalated = conflict('node')
+    escalated.state.status = 'blocked'
+    escalated.state.openEscalations = [{ id: 'esc' } as never]
+    expect(occupiesCapacity(escalated, now)).toBe(false)
+    expect(slotRequest(escalated, now)).toBeUndefined()
+    // The answer releases the admission: it asks to reconcile again.
+    escalated.state.status = 'running'
+    escalated.state.openEscalations = []
+    escalated.state.slotReleasedSeq = 4
+    expect(occupiesCapacity(escalated, now)).toBe(false)
+    expect(slotRequest(escalated, now)).toBe('reconcile')
+  })
+
+  test('idle collecting and failed-cycle nodes hold none, whatever their workspace', () => {
+    const idle = { ...build('idle', 'node', 'collecting'), workspace: true }
+    const failed = { ...admit(verifying('failed'), cycleKey), workspace: true }
+    fail(failed)
+    for (const node of [idle, failed]) {
+      expect(occupiesCapacity(node, now)).toBe(false)
+      expect(slotRequest(node, now)).toBeUndefined()
+    }
+  })
+
+  test('a legacy runner is counted, not requested, and blocks intake (version transition)', () => {
+    const viaLease = { ...verifying('node'), record: { ...verifying('node').record, lease: live } }
+    const viaExecution = verifying('node')
+    viaExecution.state.openExecution = execution(3)
+    const viaMarker = { ...verifying('node'), provisioning: true, provisioningSeq: 3 }
+    for (const node of [viaLease, viaExecution, viaMarker]) {
+      expect(legacyNodeRunner(node, now)).toBe(true)
+      expect(occupiesCapacity(node, now)).toBe(true)
+      expect(slotRequest(node, now)).toBeUndefined()
+      const capacity = dispatchCapacity([node], 1, now, { urgentClaims: 1 })
+      expect(intakeCapacity(capacity, {}, 'urgent')).toBe(0)
+      const manual = dispatchCapacity([node], 1, now, { startRequests: { manual: 1 } })
+      expect(startCapacity(manual, {}, 'manual')).toBe(0)
+    }
+    // Started before a pending pause or abort: still legacy work until acknowledged.
+    for (const command of ['pause', 'abort'] as const) {
+      const pending = verifying('node')
+      pending.state.openExecution = execution(3)
+      pending.state.pendingCommands = [{ command, seq: 4 } as never]
+      expect(legacyNodeRunner(pending, now)).toBe(true)
+      const marker = { ...verifying('node'), provisioning: true, provisioningSeq: 3 }
+      marker.state.pendingCommands = [{ command, seq: 4 } as never]
+      expect(legacyNodeRunner(marker, now)).toBe(true)
+    }
+    // Once adopted, it holds as an admitted node does: a pause acknowledgement releases it.
+    const adopted = admit(verifying('node'), cycleKey)
+    adopted.state.pendingCommands = [{ command: 'pause', seq: 4 } as never]
+    expect(nodeHoldsSlot(adopted, now)).toBe(true)
+    adopted.state.pendingCommands = []
+    adopted.state.status = 'paused'
+    adopted.state.slotReleasedSeq = 5
+    expect(occupiesCapacity(adopted, now)).toBe(false)
+    expect(legacyNodeRunner(adopted, now)).toBe(false)
+  })
+
+  test('legacy adoption matches nothing else', () => {
+    const cases: [string, CapacityBuild][] = []
+    const named = (name: string, change: (node: CapacityBuild) => void) => {
+      const node = verifying('node')
+      node.state.openExecution = execution(3)
+      change(node)
+      cases.push([name, node])
+    }
+    named('admitted under this model', (node) => (node.state.slotAdmittedNeed = 'other'))
+    named('acknowledgement-only runner', (node) => {
+      node.state.pendingCommands = [{ command: 'pause', seq: 2 } as never]
+    })
+    named('pending command without an anchor', (node) => {
+      delete node.state.openExecution
+      node.record.lease = live
+      node.state.pendingCommands = [{ command: 'abort', seq: 2 } as never]
+    })
+    named('paused', (node) => (node.state.status = 'paused'))
+    named('blocked on a question', (node) => (node.state.status = 'blocked'))
+    named('runner older than the last release', (node) => (node.state.slotReleasedSeq = 4))
+    named('no current need', fail)
+    named('workspace only', (node) => {
+      delete node.state.openExecution
+      node.workspace = true
+    })
+    for (const [name, node] of cases) {
+      expect([name, legacyNodeRunner(node, now)]).toEqual([name, false])
+      expect([name, occupiesCapacity(node, now)]).toEqual([name, false])
+    }
+  })
+
+  test('a value from an older server falls back to an allocated runner; a workspace never counts', () => {
+    const older = (node: CapacityBuild) => {
+      delete node.state.slotAdmittedSeq
+      return node
+    }
+    expect(occupiesCapacity({ ...older(verifying('node')), workspace: true }, now)).toBe(false)
+    expect(occupiesCapacity({ ...older(verifying('node')), provisioning: true }, now)).toBe(true)
+    const leased = older(verifying('node'))
+    leased.record.lease = live
+    expect(occupiesCapacity(leased, now)).toBe(true)
+  })
+
+  test('occupancy never exceeds configured over admitted and unadmitted nodes and leaves', () => {
+    const builds = [
+      admit(verifying('held'), cycleKey),
+      conflict('reconciling'),
+      verifying('waiting'),
+      conflict('unadmitted', false),
+      build('leaf'),
+    ]
+    const capacity = dispatchCapacity(builds, 3, now)
+    expect(capacity.occupied).toBe(3)
+    expect(capacity.waitingNodes).toEqual([
+      { slug: 'unadmitted', request: 'reconcile' },
+      { slug: 'waiting', request: 'verification' },
+    ])
+    expect(intakeCapacity(capacity)).toBeLessThan(0)
   })
 })
