@@ -2745,7 +2745,11 @@ succeeds or when the source has no state counts (Linear). `queue` is the
 ready-ticket queue depth measured by the latest completed ticket scan,
 whichever dispatcher run recorded it (0 before any scan), so an overlapping
 run that starts and yields cannot displace it. `active` is occupied capacity (builds holding a
-slot; paused, blocked and waiting builds hold none) against root `capacity`. Observation pressure is not a header counter: the
+slot; paused, blocked and waiting builds hold none) against root `capacity`.
+Each build's `slot` in `ab builds`, `ab build status` and the dashboard rows,
+and `capacity.slots` in `ab repository status`, report the per-build state
+behind that count: held, requested (with its request) or none; a missing value
+is unknown, never none. Observation pressure is not a header counter: the
 Harvest row shows a run's observations, and `ab harvest status` reports
 Harvest state.
 The execution-mode frontend checkpoints only the latest run start and the sampled

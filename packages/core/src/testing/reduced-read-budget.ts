@@ -8371,8 +8371,8 @@ export async function openBuildListingReadBudget() {
       for (const run of [...Object.values(all), ...Object.values(commands)]) await run(store)
       expect((await surfaces.landings(store)).map((entry) => entry.slug)).toEqual(['open-consent'])
       // Every answer reports slot state (#1341) from the facts it already read.
-      const held = { state: 'held' }
-      const none = { state: 'none' }
+      const held = { state: 'held' } as const
+      const none = { state: 'none' } as const
       // The consent leaf has not recorded `pipeline.settled`: it still holds.
       const slots = { 'open-queued': held, 'open-consent': held, 'open-aborted': none }
       for (const scope of ['active', 'queued'] as const)

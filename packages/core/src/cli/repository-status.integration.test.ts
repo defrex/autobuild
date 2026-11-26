@@ -521,7 +521,7 @@ test.each([false, true])(
       occupied: 1,
       effective: 1,
       borrowingNodes: [],
-      slots: { node: { state: 'held' }, child: { state: 'none' } },
+      slots: { node: { state: 'held' as const }, child: { state: 'none' as const } },
     }
     const opts = options(store, { json: true, now: clock })
     await abRepositoryStatus(opts)

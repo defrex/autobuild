@@ -110,7 +110,9 @@ between a node and the slot it needs to unblock them, and no node uses a
 descendant's slot. Provisioning reserves node occupancy before the runner
 starts. Status and both dashboards report occupancy against configured
 capacity, and each node waiting for a slot ahead of normal ticket claims,
-marking urgent ones. Idle collecting nodes remain free.
+marking urgent ones. Status also reports every build's slot state (`slot`,
+`capacity.slots`): a node waiting on a restack conflict reports `held`, the
+slot occupancy counts. Idle collecting nodes remain free.
 
 Claims freeze the destination build generation and branch. Missing, unopened,
 merged, closed or aborted targets leave work queued with diagnostics. The newest

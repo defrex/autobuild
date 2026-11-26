@@ -696,7 +696,12 @@ describe('projectBuild: the dashboard-visible build filter', () => {
     )
     for (const row of [alpha, queuedRow, zebra]) expect(row).not.toHaveProperty('slot')
     // Without a projection a row's slot state is unknown: absent.
-    const unknown = buildDashboardFromProjected([alpha], { repo: '/repos/app', queued: 0 })
+    const unknown = buildDashboardFromProjected([alpha], {
+      repo: '/repos/app',
+      queued: 0,
+      activeCount: 1,
+      capacity: 1,
+    })
     expect(unknown.builds[0]).toBe(alpha)
 
     const settings = buildDashboard([], CONFIG, { repo: '/repos/app', queued: 2 }, [

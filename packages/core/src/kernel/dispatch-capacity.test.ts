@@ -82,7 +82,7 @@ test('blocked and paused descendants hold no slot, so occupancy never exceeds co
     build('idle', 'node', 'collecting'),
     build('done', 'work', 'done'),
   ]
-  const none = { state: 'none' }
+  const none = { state: 'none' } as const
   expect(dispatchCapacity(builds, 3, now)).toEqual({
     configured: 3,
     occupied: 3,

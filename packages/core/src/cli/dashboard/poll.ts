@@ -30,11 +30,7 @@ import type {
   StreamRecord,
   StreamScope,
 } from '../../store/types'
-import {
-  readBuildFacts,
-  type CurrentBuildFacts,
-  type RepositoryReadFacts,
-} from '../../store/reduced-reads'
+import { readBuildFacts, type RepositoryReadFacts } from '../../store/reduced-reads'
 import { dispatchWarningLines, repositoryQueueDepth } from './header'
 import {
   projectBuild,
