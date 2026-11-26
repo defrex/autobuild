@@ -1,12 +1,27 @@
 import { afterEach, expect, test } from 'bun:test'
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  cp,
+  lstat,
+  mkdir,
+  mkdtemp,
+  readdir,
+  readFile,
+  readlink,
+  rm,
+  stat,
+  symlink,
+  writeFile,
+} from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { treeDigest } from './cli/dispatch-runtime-dependencies'
+import { distributionRoot } from './distribution'
 import {
   packageDistribution,
   RUNTIME_ARCHIVE_GZIP_LEVEL,
   SCRATCH_ARCHIVE_GZIP_LEVEL,
+  stageDistributionFiles,
 } from './distribution-packaging'
 
 const roots: string[] = []
@@ -196,4 +211,85 @@ test('every boot gzip level extracts the same packaged tree as the default', asy
     if (gzipLevel === SCRATCH_ARCHIVE_GZIP_LEVEL)
       expect(bytes.length).toBeGreaterThan(defaultBytes.length)
   }
+})
+
+/** The staging loop `stageDistributionFiles` replaced: the behavior it must keep. */
+async function serialStage(root: string, staging: string, entries: readonly string[]) {
+  for (const entry of entries) {
+    const target = join(staging, entry)
+    await mkdir(dirname(target), { recursive: true })
+    await cp(join(root, entry), target, { recursive: true, errorOnExist: true, force: false })
+  }
+}
+
+async function listing(dir: string, rel = ''): Promise<string[]> {
+  const out: string[] = []
+  for (const name of (await readdir(join(dir, rel))).sort()) {
+    const path = join(rel, name)
+    const status = await lstat(join(dir, path))
+    const kind = status.isDirectory() ? 'dir' : status.isFile() ? 'file' : 'link'
+    const content =
+      kind === 'link'
+        ? await readlink(join(dir, path))
+        : kind === 'file'
+          ? String(Bun.hash(await readFile(join(dir, path))))
+          : ''
+    out.push(`${path} ${kind} ${(status.mode & 0o7777).toString(8)} ${content}`)
+    if (kind === 'dir') out.push(...(await listing(dir, path)))
+  }
+  return out
+}
+
+async function stagedBothWays(root: string, entries: readonly string[]) {
+  const [oracle, staged] = await Promise.all([
+    mkdtemp(join(tmpdir(), 'ab-stage-oracle-')),
+    mkdtemp(join(tmpdir(), 'ab-stage-bounded-')),
+  ])
+  roots.push(oracle, staged)
+  await serialStage(root, oracle, entries)
+  await stageDistributionFiles(root, staged, entries)
+  const result = [await listing(oracle), await listing(staged)] as const
+  // Read-only directories must be writable again for cleanup.
+  await Bun.$`chmod -R u+w ${oracle} ${staged}`.quiet()
+  return result
+}
+
+test('bounded staging reproduces the serial cp tree: modes, links, dotfiles and nested entries', async () => {
+  const root = await fixture()
+  const write = async (path: string, body: string, mode = 0o644) => {
+    await mkdir(dirname(join(root, path)), { recursive: true })
+    await writeFile(join(root, path), body)
+    await chmod(join(root, path), mode)
+  }
+  await write('src/nested/deep/module.ts', 'export {}\n')
+  await write('src/.hidden', 'dot\n')
+  await write('src/node_modules/pkg/index.js', 'module.exports = 1\n')
+  await write('src/tool.ts', '#!/usr/bin/env bun\n', 0o755)
+  await write('src/secret.txt', 'secret\n', 0o640)
+  await write('src/setuid', 'suid\n', 0o4755)
+  await write('src/locked/inner/file.ts', 'locked\n')
+  await write('src/private/file.ts', 'private\n')
+  await mkdir(join(root, 'src/empty'))
+  await symlink('nested/deep/module.ts', join(root, 'src/relative-link'))
+  await symlink('/etc/hostname', join(root, 'src/absolute-link'))
+  await symlink('nested', join(root, 'src/directory-link'))
+  await write('a/b/c', 'nested entry\n')
+  await write('LICENSE', 'license\n')
+  await chmod(join(root, 'src/private'), 0o750)
+  await chmod(join(root, 'src/locked'), 0o555)
+  try {
+    const [oracle, staged] = await stagedBothWays(root, ['src', 'a/b/c', 'LICENSE'])
+    expect(staged).toEqual(oracle)
+    expect(oracle.length).toBeGreaterThan(15)
+  } finally {
+    await chmod(join(root, 'src/locked'), 0o755)
+  }
+})
+
+test('bounded staging reproduces the serial cp tree for the shipped distribution', async () => {
+  const root = distributionRoot()
+  const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'))
+  const entries = (manifest.files as string[]).filter((entry) => !entry.startsWith('!'))
+  const [oracle, staged] = await stagedBothWays(root, entries)
+  expect(staged).toEqual(oracle)
 })
