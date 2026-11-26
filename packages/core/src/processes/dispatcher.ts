@@ -1296,6 +1296,9 @@ export class Dispatcher {
    * "Slot admission order"). Nothing was written for them;
    * `admitDeferredParked` retries each through its generic path. */
   private readonly deferredAdmissions = new Map<string, 'leaf' | 'node' | 'proposer'>()
+  /** Nodes `admitWaitingNodes` admitted in its current verification pass, so
+   * proposer admission counts them even when provisioning or launch failed. */
+  private passNodeAdmissions: Set<string> | undefined
   /** Per tick: admission may defer normal parked work. Opened by `runTick`
    * when claims can run, closed once urgent claims were evaluated. */
   private admissionBoundary = false
@@ -4275,7 +4278,7 @@ export class Dispatcher {
           else if (build) await this.admitNode(build, this.deps.clock(), report, launched)
         } else {
           const builds = await this.capacityBuilds()
-          await this.admitProposers(builds, this.deps.clock(), 0, report, launched, opts, slug)
+          await this.admitProposers(builds, this.deps.clock(), report, launched, opts, slug)
         }
       } catch (error) {
         rethrowAuthorityLapse(error)
@@ -4325,12 +4328,23 @@ export class Dispatcher {
     // verification whose runner never started or was lost: nothing else
     // relaunches it.
     const waiting = builds.filter((build) => nodeRunnerWork(build, now)?.request === 'verification')
-    const before = launched.size
-    for (const build of waiting) {
-      if (this.outOfBudget(opts)) return
-      await this.admitNode(build, now, report, launched)
+    const admitted = new Set<string>()
+    this.passNodeAdmissions = admitted
+    try {
+      for (const build of waiting) {
+        if (this.outOfBudget(opts)) return
+        await this.admitNode(build, now, report, launched)
+      }
+    } finally {
+      this.passNodeAdmissions = undefined
     }
-    await this.admitProposers(builds, now, launched.size - before, report, launched, opts)
+    // A node admitted this pass holds its slot whatever its provisioning or
+    // launch did: the proposers' capacity counts it from its durable facts,
+    // and a holder that merely relaunched is already counted.
+    for (const build of waiting)
+      if (admitted.has(build.record.slug))
+        build.state = (await this.store.servedBuildFacts(build.record.slug)).state
+    await this.admitProposers(builds, now, report, launched, opts)
   }
 
   /**
@@ -4440,7 +4454,6 @@ export class Dispatcher {
   private async admitProposers(
     builds: CapacityBuild[],
     now: Date,
-    admittedThisPass: number,
     report: TickReport,
     launched: Set<string>,
     opts: TickOpts,
@@ -4457,7 +4470,7 @@ export class Dispatcher {
       urgentClaims: this.urgentClaims(),
       startRequests: this.startClaims(),
     })
-    let occupied = projection.occupied + admittedThisPass
+    let occupied = projection.occupied
     for (const build of proposers) {
       if (this.outOfBudget(opts)) return
       const { record, state } = build
@@ -4905,6 +4918,7 @@ export class Dispatcher {
       payload: { request: need.request, need: need.key },
     } satisfies EventWrite<'slot.admitted'>)
     if (admitted === null) return false
+    this.passNodeAdmissions?.add(slug)
     await this.store.servedBuildFacts(slug)
     return true
   }

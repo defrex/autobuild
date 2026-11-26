@@ -2152,7 +2152,6 @@ async function measureProposerStages(
     admitProposers(
       builds: unknown[],
       now: Date,
-      admitted: number,
       report: unknown,
       launched: Set<string>,
       opts: object,
@@ -2168,7 +2167,7 @@ async function measureProposerStages(
     await stages.advanceOptimizationNodes(report, {}, entries, now)
     await stages.optimizationCreationHolds()
     await stages.releaseStrandedNodeWorkspaces(builds, now, new Set(), report, {})
-    await stages.admitProposers(builds, now, 0, report, new Set(), {})
+    await stages.admitProposers(builds, now, report, new Set(), {})
   })
 }
 

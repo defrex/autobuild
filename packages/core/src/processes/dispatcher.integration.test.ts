@@ -19492,6 +19492,55 @@ describe('the dispatcher admits and decides optimization measurements (SPEC §13
     ).toHaveLength(1)
   })
 
+  test('a verification admission whose provisioning fails still counts before proposers are admitted', async () => {
+    const h = harness({ toml: 'capacity = 1\n' })
+    const open = async (slug: string) => {
+      h.forge.seedBranch(`ab-node/${slug}`, PIN)
+      await h.store.createBuild({ slug, repo: REPO, branch: `ab-node/${slug}` })
+      const append = (type: string, payload: object, actor: object = DISPATCHER) =>
+        h.store.append(slug, { actor, type, payload } as never)
+      await append('build.created', {
+        ticket: { source: 'fake', id: slug.toUpperCase() },
+        repo: REPO,
+        baseBranch: 'main',
+        kind: 'node',
+      })
+      await append('optimization.objective-accepted', {
+        objective: objective(),
+        revision: 1,
+        harnessPin: PIN,
+        specRev: 0,
+      })
+      await append('node.opened', { sha: PIN })
+      return append
+    }
+    await open('a-measure')
+    const propose = await open('z-propose')
+    await propose(
+      'optimization.baseline-measured',
+      { revision: 1, head: PIN, harnessPin: PIN, samples: 3, median: 50, spread: 0.5 },
+      KERNEL,
+    )
+    await propose('optimization.proposal-requested', {
+      id: 'req-z',
+      head: PIN,
+      room: 1,
+      budgetUsed: { attempts: 0, hours: 0 },
+    })
+    const provision = h.workspaces.provision.bind(h.workspaces)
+    h.workspaces.provision = async (request) => {
+      if (request.branch === 'ab-node/a-measure') throw new Error('provider unavailable')
+      return provision(request)
+    }
+    await h.dispatcher.tick({ acceptNewWork: false })
+    const admitted = []
+    for (const slug of ['a-measure', 'z-propose'])
+      if ((await h.store.getEvents(slug)).some((event) => event.type === 'slot.admitted'))
+        admitted.push(slug)
+    expect(admitted).toEqual(['a-measure'])
+    expect(h.launches).not.toContain('z-propose')
+  })
+
   describe('node runners an older dispatcher launched (version transition, SPEC §15)', () => {
     const NEED = { request: 'verification' as const, need: `measure:baseline:1:${PIN}` }
     /** A measurement node whose runner an older dispatcher launched with no
