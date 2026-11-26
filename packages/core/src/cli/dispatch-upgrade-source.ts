@@ -11,8 +11,13 @@ import {
   readdir,
   readlink,
 } from 'node:fs/promises'
-import { join, resolve } from 'node:path'
-import { packageDistribution, SCRATCH_ARCHIVE_GZIP_LEVEL } from '../distribution-packaging'
+import { join, posix, resolve } from 'node:path'
+import {
+  packageDistribution,
+  SCRATCH_ARCHIVE_GZIP_LEVEL,
+  withDistributionSelection,
+  type DistributionSelection,
+} from '../distribution-packaging'
 import { parse as parseToml } from 'smol-toml'
 import { treeDigest, inside, type Manifest } from './dispatch-runtime-dependencies'
 import type { Exec } from '../ports/workspace/git-worktree'
@@ -279,11 +284,127 @@ export async function sourceContent(
   return { key, version: String(manifest.version) }
 }
 
-async function packagedFingerprint(root: string, signal?: AbortSignal): Promise<string> {
+/** Exported for equivalence tests; `sourceContent` is the product entry. */
+export async function packagedFingerprint(root: string, signal?: AbortSignal): Promise<string> {
   const manifest = JSON.parse(await readFile(join(root, 'package.json'), 'utf8')) as Manifest
   for (const path of manifest.files ?? [])
     if (!path.startsWith('!') && !inside(root, resolve(root, path)))
       throw new Error('unsafe packaged source path')
+  return (
+    (await packedContentFingerprint(root, signal)) ??
+    (await archivedPackageFingerprint(root, signal))
+  )
+}
+
+/** The packed-contents digest from Bun's dry-run selection, with no archive.
+ * `undefined` when the selection or its modes cannot be proven equal to what
+ * an archive would carry; the caller then packs for real. */
+export async function packedContentFingerprint(
+  root: string,
+  signal?: AbortSignal,
+): Promise<string | undefined> {
+  return withDistributionSelection(
+    root,
+    async (selection) => selectedTreeDigest(selection),
+    undefined,
+    signal ?? AbortSignal.timeout(120_000),
+  )
+}
+
+/** Must stay byte-compatible with `treeDigest` over the
+ * `tar -x --strip-components=1` extraction `archivedPackageFingerprint`
+ * hashes. Directory bits `0o111` and staged file bits hold only because the
+ * selection's creation-mode probe and `binModesSafe` passed. */
+async function selectedTreeDigest(selection: DistributionSelection): Promise<string | undefined> {
+  const { staging, files, manifest, modes } = selection
+  if (!binModesSafe(manifest, files, modes)) return undefined
+  type Node = Map<string, Node | null>
+  const tree: Node = new Map()
+  for (const file of files) {
+    const segments = file.split('/')
+    let node = tree
+    for (const segment of segments.slice(0, -1)) {
+      let child = node.get(segment)
+      if (child === null) return undefined
+      if (!child) {
+        child = new Map()
+        node.set(segment, child)
+      }
+      node = child
+    }
+    if (node.has(segments.at(-1)!)) return undefined
+    node.set(segments.at(-1)!, null)
+  }
+  const hash = createHash('sha256')
+  async function walk(rel: string, node: Node | null): Promise<void> {
+    if (node === null) {
+      hash.update(JSON.stringify([rel, modes.get(rel)! & 0o111]))
+      hash.update('file')
+      if (rel === 'package.json') {
+        const packed = JSON.parse(await readFile(join(staging, rel), 'utf8'))
+        delete packed.gitHead
+        hash.update(JSON.stringify(canonical(packed)))
+      } else hash.update(await readFile(join(staging, rel)))
+      return
+    }
+    hash.update(JSON.stringify([rel, 0o111]))
+    hash.update('directory')
+    for (const name of [...node.keys()].sort())
+      await walk(rel ? `${rel}/${name}` : name, node.get(name)!)
+  }
+  await walk('', tree)
+  return hash.digest('hex')
+}
+
+/** Bun packs `bin` targets (and, without `bin`, direct children of
+ * `directories.bin`) with every execute bit set. Rather than model that
+ * rule, require every file in a superset of those targets to be executable
+ * already, so marking changes nothing; anything else uses a real archive. */
+function binModesSafe(
+  manifest: Record<string, unknown>,
+  files: string[],
+  modes: Map<string, number>,
+): boolean {
+  const target = (value: unknown): string | undefined => {
+    if (typeof value !== 'string' || /[\\\u0000-\u001f\u007f]/.test(value)) return undefined
+    const normal = posix.normalize(value.replace(/^\/+/, '')).replace(/\/+$/, '')
+    if (!normal || normal === '.' || normal === '..' || normal.startsWith('../')) return undefined
+    return normal
+  }
+  const executable = (file: string) => (modes.get(file)! & 0o111) === 0o111
+  const { bin, directories } = manifest
+  if (bin !== undefined) {
+    const values =
+      typeof bin === 'string'
+        ? [bin]
+        : bin && typeof bin === 'object' && !Array.isArray(bin)
+          ? Object.values(bin)
+          : undefined
+    if (!values) return false
+    for (const value of values) {
+      const path = target(value)
+      if (!path) return false
+      if (modes.has(path) && !executable(path)) return false
+    }
+  }
+  if (directories !== undefined) {
+    if (!directories || typeof directories !== 'object' || Array.isArray(directories)) return false
+    const directory = (directories as Record<string, unknown>).bin
+    if (directory !== undefined) {
+      const path = target(directory)
+      if (!path) return false
+      for (const file of files)
+        if ((file === path || file.startsWith(`${path}/`)) && !executable(file)) return false
+    }
+  }
+  return true
+}
+
+/** The identity as an extracted real pack archive; fallback and test oracle. */
+export async function archivedPackageFingerprint(
+  root: string,
+  signal?: AbortSignal,
+): Promise<string> {
   // Launch baselines also package the live checkout and its workspaces. Scratch
   // must never require write access beside either source root.
   const stage = await mkdtemp(join(tmpdir(), 'autobuild-source-fingerprint-'))
