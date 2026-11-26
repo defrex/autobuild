@@ -373,7 +373,11 @@ retain recovery accounting.
 
 The predecessor serializes acceptance with ticks and launch admission, joins
 repository-owned harvest and provisioning work, and records the exact local
-executions, start time and deadline. Its terminal frontend removes and joins
+executions, start time and deadline. While a prepared target is outstanding, the
+predecessor also observes its durable yield request between ticks at a bounded
+cadence, one reduced read per step, and attempts acceptance through the same
+serialization. The observation carries no outcome, and ordinary tick cadence is
+unchanged. Its terminal frontend removes and joins
 input/render work before acknowledging terminal release. Only after that durable
 acknowledgement and a successful repository lease claim may the successor draw
 or consume input. Only the successor ticks, claims, runs janitor/harvest and

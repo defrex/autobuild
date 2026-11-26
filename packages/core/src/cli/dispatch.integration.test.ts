@@ -13069,6 +13069,122 @@ for (const scenario of [
     }
   }, 15_000)
 
+for (const automatic of [true, false])
+  test(`a yield request between ticks is observed without another tick (automatic=${automatic})`, async () => {
+    const fx = await makeFixture(
+      [],
+      happyHandlers(),
+      automatic ? undefined : `${DISPATCH_CONFIG_TOML}\n[upgrade]\nautomatic = false\n`,
+    )
+    const abort = new AbortController()
+    const between = deferred(),
+      resume = deferred()
+    const handoff = {
+      correlation: 'observed-handoff',
+      run: 'predecessor',
+      lineage: 'test-launcher',
+      from: runtimeIdentity(),
+      to: { ...runtimeIdentity(), version: '2.0.0' },
+      root: '/cached/target',
+      cacheId: 'target',
+      target: { mode: 'installed' as const, key: 'target', source: '/installation' },
+    }
+    const repoEvents = () => fx.store.getRepoEvents(fx.origin)
+    const until = async (done: () => Promise<boolean>) => {
+      const deadline = Date.now() + 5_000
+      while (Date.now() < deadline && !(await done()))
+        await new Promise<void>((resolve) => setTimeout(resolve, 20))
+    }
+    let sleeps = 0
+    const tickCalls: string[] = [],
+      claimCalls: string[] = []
+    const begin = fx.store.beginRepoTick.bind(fx.store),
+      claim = fx.store.claimRepoLease.bind(fx.store)
+    fx.store.beginRepoTick = (repo, holder) => {
+      tickCalls.push(holder)
+      return begin(repo, holder)
+    }
+    fx.store.claimRepoLease = (repo, holder, ttl) => {
+      claimCalls.push(holder)
+      return claim(repo, holder, ttl)
+    }
+    let upgradeReads = 0
+    const getReducerValue = fx.store.getReducerValue.bind(fx.store)
+    fx.store.getReducerValue = async (...args) => {
+      if (args[1].reducer === 'dispatchUpgrade') upgradeReads++
+      return getReducerValue(...args)
+    }
+    const root = (await import('../distribution')).distributionRoot()
+    const running = abDispatch({
+      targetRepo: fx.checkout,
+      env: {
+        AB_DISPATCH_LAUNCH_CONTEXT: JSON.stringify({
+          version: 1,
+          overlapVersion: 1,
+          runtimeRoot: root,
+          checkout: fx.checkout,
+          originalInstall: root,
+          run: 'predecessor',
+          lineage: 'test-launcher',
+        }),
+      },
+      exec: spawnExec,
+      stdout: () => {},
+      stderr: () => {},
+      plain: true,
+      signal: abort.signal,
+      sleep: async () => {
+        if (sleeps++ === 0) {
+          // The fixture forge cannot resolve a target, so the enabled
+          // controller's first check fails; prepare after it, as a cutover would.
+          if (automatic)
+            await until(async () =>
+              (await repoEvents()).some((event) => event.type === 'dispatcher.upgrade-failed'),
+            )
+          await fx.store.appendRepo(fx.origin, {
+            actor: DISPATCHER,
+            type: 'dispatcher.target-prepared',
+            payload: handoff,
+          })
+          return
+        }
+        // The ordinary interval never elapses: only the observation can accept.
+        between.resolve()
+        await resume.promise
+      },
+      wire: fx.wire,
+    })
+    try {
+      await between.promise
+      const ticks = tickCalls.length,
+        claims = claimCalls.length,
+        readsBefore = upgradeReads
+      await fx.store.appendRepo(fx.origin, {
+        actor: DISPATCHER,
+        type: 'dispatcher.yield-requested',
+        payload: { ...handoff, successor: 'successor', mode: 'drain', evidence: 'test' },
+      })
+      const accepted = async () =>
+        (await repoEvents()).some((event) => event.type === 'dispatcher.handoff-started')
+      // Declined: the observation's read plus the acceptance attempt's own.
+      await until(async () => (automatic ? accepted() : upgradeReads >= readsBefore + 2))
+      expect(await accepted()).toBe(automatic)
+      expect(upgradeReads).toBeGreaterThanOrEqual(readsBefore + 2)
+      expect({ sleeps, ticks: tickCalls.length, claims: claimCalls.length }).toEqual({
+        sleeps: 2,
+        ticks,
+        claims,
+      })
+    } finally {
+      if (!automatic) abort.abort()
+      resume.resolve()
+      await running
+      await fx.cleanup()
+    }
+    const events = await fx.store.getRepoEvents(fx.origin)
+    expect(events.some((event) => event.type === 'dispatcher.handoff-completed')).toBe(automatic)
+  }, 15_000)
+
 for (const peer of [false, true]) {
   test(`once teardown releases only its own lease (peer=${peer})`, async () => {
     const fx = await makeFixture([], happyHandlers())

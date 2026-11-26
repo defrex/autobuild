@@ -605,7 +605,10 @@ worktree. Excluded-file commits change observed provenance without adoption.
 `dispatch-upgrade-controller.ts` checks immediately and every 60 seconds, suppresses
 failed target inputs and publishes durable prepared targets. `dispatch-preflight.ts`
 checks target configuration, provider compatibility and actual protocol-write
-admission before requesting yield. `kernel/dispatch-upgrade.ts` folds correlated
+admission before requesting yield. `dispatch-yield-observer.ts` watches the reduced
+upgrade value at a fixed cadence and step limit while the run has a prepared
+target, and queues acceptance through the tick serialization.
+`kernel/dispatch-upgrade.ts` folds correlated
 acceptance, terminal release, takeover, per-execution retirement and completion.
 The runtime-owned `dispatch-handoff.ts` reader lets the filesystem-only launcher
 supervise overlapping generations without owning Store or config decisions.
