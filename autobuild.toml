@@ -249,6 +249,8 @@ readyState = "ready"            # sole state gate, alongside the assignee gate
 readyLabels = []                # no additional label gate
 readyAssignee = "me"
 createAssignee = "me"
+createLabels = ["autobuild"]   # marks Autobuild-filed tickets (harvest proposals included),
+                                # keeping them separable from user reports on public issues
 createState = "ready"           # tickets filed through `ab` go straight to ready
 triageState = "triage"          # bounced, aborted, and closed-unmerged tickets return here
 proposalState = "triage"        # harvest proposals wait for a human to groom them to ready.
